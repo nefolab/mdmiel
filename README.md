@@ -14,7 +14,10 @@ AI成果物のレビュー基地として設計している。生成した要件
 
 ## ビルド
 
+先にフロントエンドをビルドする ( 成果物 web/dist がGoバイナリにembedされる )。web/dist と web/node_modules はリポジトリに含めないため、clone後は必ずこの手順が必要。
+
 ```
+cd web && npm install && npm run build && cd ..
 go build -o mdmiel ./cmd/mdmiel
 ```
 
