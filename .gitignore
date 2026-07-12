@@ -1,0 +1,18 @@
+# Binaries
+/mdmiel
+/mdmiel.exe
+
+# Testing
+*.test
+*.out
+
+# Frontend
+/web/node_modules
+/web/dist
+
+# Local agent config & working docs
+/.claude/
+/CLAUDE.md
+
+# Runtime comment data (root dir)
+/.mdmiel/
