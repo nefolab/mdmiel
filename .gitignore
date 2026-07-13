@@ -16,3 +16,6 @@
 
 # Runtime comment data (root dir)
 /.mdmiel/
+
+# Working docs (local only)
+/working/
