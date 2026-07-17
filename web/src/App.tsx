@@ -5,9 +5,11 @@ import { CommentSidebar, CommentSidebarPaneInfo } from './components/CommentSide
 import { parseHash, generateHash, ViewState } from './lib/anchor';
 import { Comment } from './lib/comments';
 import { listComments } from './lib/commentsApi';
+import { Theme, getInitialTheme, applyTheme } from './lib/theme';
 
 export default function App() {
   const [viewState, setViewState] = useState<ViewState>(() => parseHash(window.location.hash));
+  const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const [commentsRefreshKey, setCommentsRefreshKey] = useState(0);
   const [paneContents, setPaneContents] = useState<{
@@ -29,6 +31,11 @@ export default function App() {
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
+
+  // 起動時・切替時にdata-theme属性とlocalStorageへ反映する。
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   // Fetch comments per pane whenever the shown files or a refresh signal change.
   // Lifted here so both the overlay sticky notes and the sidebar share one source.
@@ -153,13 +160,34 @@ export default function App() {
           <span className="logo-icon">📝</span>
           <span className="logo-title">mdmiel</span>
         </div>
-        <button
-          className={`comments-toggle-btn ${commentsPanelOpen ? 'active' : ''}`}
-          onClick={() => setCommentsPanelOpen((v) => !v)}
-          title="コメントパネルの表示切替"
-        >
-          💬 コメント
-        </button>
+        <div className="header-actions">
+          <div className="theme-switcher">
+            <span className="theme-switcher-label">theme</span>
+            <div className="theme-switcher-track">
+              <button
+                className={`theme-switcher-btn ${theme === 'paper' ? 'active' : ''}`}
+                onClick={() => setTheme('paper')}
+                title="paperテーマに切替"
+              >
+                paper
+              </button>
+              <button
+                className={`theme-switcher-btn ${theme === 'slate' ? 'active' : ''}`}
+                onClick={() => setTheme('slate')}
+                title="slateテーマに切替"
+              >
+                slate
+              </button>
+            </div>
+          </div>
+          <button
+            className={`comments-toggle-btn ${commentsPanelOpen ? 'active' : ''}`}
+            onClick={() => setCommentsPanelOpen((v) => !v)}
+            title="コメントパネルの表示切替"
+          >
+            💬 コメント
+          </button>
+        </div>
       </header>
       <div className="app-container">
         <Sidebar

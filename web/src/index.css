@@ -1,14 +1,57 @@
+/* テーマ色トークン。正本は working/theme-tokens.md ( claude designプロトタイプから抽出 )。
+   paper ( 明るい紙色 ) と slate ( ダーク ) の2テーマのみをプロダクト採用する。
+   フォントはプロトタイプのWebフォント指定を無視し、システムフォントスタックを使う。 */
+:root[data-theme="slate"] {
+  --color-bg: #12151b;
+  --color-panel: #191d24;
+  --color-panel2: #161a20;
+  --color-border: #2a313b;
+  --color-row-hover: #1e242d;
+  --color-text: #dce1e8;
+  --color-muted: #7c8593;
+  --color-accent: #4fb6c4;
+  --color-accent-soft: #16282c;
+  --color-header: #0d1014;
+  --color-header-text: #dce1e8;
+  --color-header-border: #232a33;
+  --color-note: #3a3320;
+  --color-note-border: #6a5d2c;
+  --color-note-text: #f0e6c8;
+  --color-chip-bg: #232a33;
+  --color-theme-track-bg: rgba(255, 255, 255, 0.06);
+  --color-flash: #243b40;
+  /* 以下はtheme-tokens.mdに無い補助トークン ( 用途はこのファイル内のコメント参照 ) */
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 85%, black);
+  --color-danger: #f87171;
+  --color-success: #4ade80;
+}
+
+:root[data-theme="paper"] {
+  --color-bg: #efe9dd;
+  --color-panel: #faf6ec;
+  --color-panel2: #f3ecdd;
+  --color-border: #e2dac6;
+  --color-row-hover: #efe6d2;
+  --color-text: #2c2822;
+  --color-muted: #8f8674;
+  --color-accent: #a8572a;
+  --color-accent-soft: #f0e2cf;
+  --color-header: #2c2822;
+  --color-header-text: #faf6ec;
+  --color-header-border: #453f36;
+  --color-note: #fff2b0;
+  --color-note-border: #ecd67a;
+  --color-note-text: #3a3320;
+  --color-chip-bg: #e8dfca;
+  --color-theme-track-bg: rgba(255, 255, 255, 0.1);
+  --color-flash: #fbe6b0;
+  /* 以下はtheme-tokens.mdに無い補助トークン ( 用途はこのファイル内のコメント参照 ) */
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 85%, black);
+  --color-danger: #c23b3b;
+  --color-success: #2f855a;
+}
+
 :root {
-  --bg-primary: #121214;
-  --bg-secondary: #1a1a1e;
-  --bg-tertiary: #26262b;
-  --text-primary: #e4e4e7;
-  --text-secondary: #a1a1aa;
-  --accent: #6366f1;
-  --accent-hover: #4f46e5;
-  --border: #3f3f46;
-  --highlight-bg: rgba(99, 102, 241, 0.25);
-  --highlight-border: rgba(99, 102, 241, 0.5);
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 }
@@ -20,8 +63,8 @@
 }
 
 body {
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
+  background-color: var(--color-bg);
+  color: var(--color-text);
   font-family: var(--font-sans);
   overflow: hidden;
   height: 100vh;
@@ -37,8 +80,9 @@ body {
 /* Header */
 .app-header {
   height: 56px;
-  background-color: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  background-color: var(--color-header);
+  color: var(--color-header-text);
+  border-bottom: 1px solid var(--color-header-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -62,10 +106,62 @@ body {
   letter-spacing: 0.5px;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+/* テーマ切替トグル */
+.theme-switcher {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.theme-switcher-label {
+  font-size: 12px;
+  color: var(--color-header-text);
+  opacity: 0.7;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.theme-switcher-track {
+  display: flex;
+  gap: 2px;
+  background-color: var(--color-theme-track-bg);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.theme-switcher-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-header-text);
+  opacity: 0.7;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.theme-switcher-btn:hover {
+  opacity: 1;
+}
+
+.theme-switcher-btn.active {
+  background-color: var(--color-accent);
+  color: var(--color-header);
+  opacity: 1;
+}
+
 .comments-toggle-btn {
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
+  border: 1px solid var(--color-header-border);
+  color: var(--color-header-text);
+  opacity: 0.75;
   border-radius: 6px;
   padding: 6px 12px;
   font-size: 13px;
@@ -74,14 +170,15 @@ body {
 }
 
 .comments-toggle-btn:hover {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
+  background-color: var(--color-theme-track-bg);
+  opacity: 1;
 }
 
 .comments-toggle-btn.active {
-  background-color: rgba(99, 102, 241, 0.15);
-  border-color: var(--accent);
-  color: var(--text-primary);
+  background-color: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-text);
+  opacity: 1;
 }
 
 /* Layout */
@@ -95,8 +192,8 @@ body {
 /* Sidebar */
 .sidebar {
   width: 280px;
-  background-color: var(--bg-secondary);
-  border-right: 1px solid var(--border);
+  background-color: var(--color-panel);
+  border-right: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -106,7 +203,7 @@ body {
 .sidebar-title {
   font-size: 12px;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--color-muted);
   padding: 16px 16px 8px 16px;
   font-weight: 600;
   letter-spacing: 1px;
@@ -129,12 +226,12 @@ body {
 }
 
 .file-item:hover {
-  background-color: var(--bg-tertiary);
+  background-color: var(--color-row-hover);
 }
 
 .file-item.active {
-  background-color: rgba(99, 102, 241, 0.15);
-  border-left: 3px solid var(--accent);
+  background-color: var(--color-accent-soft);
+  border-left: 3px solid var(--color-accent);
 }
 
 .file-info {
@@ -168,8 +265,8 @@ body {
 
 .btn-open-right {
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
   border-radius: 4px;
   padding: 2px 6px;
   font-size: 11px;
@@ -178,9 +275,9 @@ body {
 }
 
 .btn-open-right:hover {
-  background: var(--accent);
+  background: var(--color-accent);
   color: white;
-  border-color: var(--accent);
+  border-color: var(--color-accent);
 }
 
 /* SplitView */
@@ -201,13 +298,13 @@ body {
 }
 
 .pane + .pane {
-  border-left: 1px solid var(--border);
+  border-left: 1px solid var(--color-border);
 }
 
 .pane-header {
   height: 40px;
-  background-color: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  background-color: var(--color-panel);
+  border-bottom: 1px solid var(--color-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -218,7 +315,7 @@ body {
 .pane-title {
   font-size: 13px;
   font-weight: 500;
-  color: var(--text-secondary);
+  color: var(--color-muted);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -258,7 +355,7 @@ body {
 
 .gutter-link-btn,
 .gutter-comment-btn {
-  background-color: var(--accent);
+  background-color: var(--color-accent);
   color: white;
   border: none;
   border-radius: 4px;
@@ -274,19 +371,19 @@ body {
 
 .gutter-link-btn:hover,
 .gutter-comment-btn:hover {
-  background-color: var(--accent-hover);
+  background-color: var(--color-accent-hover);
   transform: scale(1.1);
 }
 
 .gutter-comment-btn {
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
+  background-color: var(--color-panel2);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
 }
 
 .gutter-comment-btn:hover {
-  background-color: var(--accent);
-  border-color: var(--accent);
+  background-color: var(--color-accent);
+  border-color: var(--color-accent);
   color: white;
 }
 
@@ -295,8 +392,8 @@ body {
   position: absolute;
   z-index: 200;
   width: 280px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border);
+  background-color: var(--color-panel);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.5);
   padding: 10px;
@@ -310,29 +407,29 @@ body {
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--color-muted);
 }
 
 .comment-popover-close {
   background: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--color-muted);
   cursor: pointer;
   font-size: 12px;
   line-height: 1;
 }
 
 .comment-popover-close:hover {
-  color: var(--text-primary);
+  color: var(--color-text);
 }
 
 .comment-popover-textarea {
   width: 100%;
   min-height: 72px;
   resize: vertical;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 8px;
   font-family: var(--font-sans);
@@ -341,12 +438,12 @@ body {
 
 .comment-popover-textarea:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--color-accent);
 }
 
 .comment-popover-error {
   font-size: 12px;
-  color: #f87171;
+  color: var(--color-danger);
 }
 
 .comment-popover-actions {
@@ -365,13 +462,13 @@ body {
 }
 
 .btn-primary {
-  background-color: var(--accent);
+  background-color: var(--color-accent);
   color: white;
   border: none;
 }
 
 .btn-primary:hover:not(:disabled) {
-  background-color: var(--accent-hover);
+  background-color: var(--color-accent-hover);
 }
 
 .btn-primary:disabled,
@@ -382,24 +479,24 @@ body {
 
 .btn-secondary {
   background: transparent;
-  border: 1px solid var(--border);
-  color: var(--text-secondary);
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
 }
 
 .btn-secondary:hover:not(:disabled) {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
+  background-color: var(--color-row-hover);
+  color: var(--color-text);
 }
 
 /* Document Highlighting */
 @keyframes highlightPulse {
   0% {
-    background-color: var(--highlight-bg);
-    outline: 2px solid var(--accent);
+    background-color: var(--color-flash);
+    outline: 2px solid var(--color-accent);
   }
-  50% {
-    background-color: rgba(99, 102, 241, 0.4);
-    outline: 2px solid var(--accent);
+  60% {
+    background-color: var(--color-flash);
+    outline: 2px solid var(--color-accent);
   }
   100% {
     background-color: transparent;
@@ -426,7 +523,7 @@ body {
 }
 
 .markdown-body [data-source-line]:hover {
-  background-color: rgba(255, 255, 255, 0.03);
+  background-color: var(--color-row-hover);
 }
 
 .markdown-body h1,
@@ -441,8 +538,8 @@ body {
   line-height: 1.25;
 }
 
-.markdown-body h1 { font-size: 2em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
-.markdown-body h2 { font-size: 1.5em; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+.markdown-body h1 { font-size: 2em; border-bottom: 1px solid var(--color-border); padding-bottom: 0.3em; }
+.markdown-body h2 { font-size: 1.5em; border-bottom: 1px solid var(--color-border); padding-bottom: 0.3em; }
 .markdown-body h3 { font-size: 1.25em; }
 
 .markdown-body p {
@@ -454,7 +551,7 @@ body {
   padding: 0.2em 0.4em;
   margin: 0;
   font-size: 85%;
-  background-color: var(--bg-tertiary);
+  background-color: var(--color-panel2);
   border-radius: 6px;
   font-family: var(--font-mono);
 }
@@ -464,7 +561,7 @@ body {
   overflow: auto;
   font-size: 85%;
   line-height: 1.45;
-  background-color: var(--bg-tertiary);
+  background-color: var(--color-panel2);
   border-radius: 6px;
   margin-bottom: 16px;
 }
@@ -489,8 +586,8 @@ body {
 
 .markdown-body blockquote {
   padding: 0 1em;
-  color: var(--text-secondary);
-  border-left: 0.25em solid var(--border);
+  color: var(--color-muted);
+  border-left: 0.25em solid var(--color-border);
   margin-bottom: 16px;
 }
 
@@ -504,22 +601,22 @@ body {
 .markdown-body table th,
 .markdown-body table td {
   padding: 6px 13px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--color-border);
 }
 
 .markdown-body table tr {
-  background-color: var(--bg-primary);
-  border-top: 1px solid var(--border);
+  background-color: var(--color-bg);
+  border-top: 1px solid var(--color-border);
 }
 
 .markdown-body table tr:nth-child(2n) {
-  background-color: var(--bg-secondary);
+  background-color: var(--color-panel);
 }
 
 .close-btn {
   background: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--color-muted);
   font-size: 18px;
   cursor: pointer;
   display: flex;
@@ -531,17 +628,17 @@ body {
 }
 
 .close-btn:hover {
-  background-color: var(--bg-tertiary);
-  color: var(--text-primary);
+  background-color: var(--color-row-hover);
+  color: var(--color-text);
 }
 
 .toast {
   position: fixed;
   bottom: 24px;
   right: 24px;
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--accent);
-  color: var(--text-primary);
+  background-color: var(--color-panel);
+  border: 1px solid var(--color-accent);
+  color: var(--color-text);
   padding: 12px 24px;
   border-radius: 8px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.5);
@@ -560,8 +657,8 @@ body {
 /* Comment Sidebar */
 .comment-sidebar {
   width: 320px;
-  background-color: var(--bg-secondary);
-  border-left: 1px solid var(--border);
+  background-color: var(--color-panel);
+  border-left: 1px solid var(--color-border);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -571,7 +668,7 @@ body {
 .comment-sidebar-title {
   font-size: 12px;
   text-transform: uppercase;
-  color: var(--text-secondary);
+  color: var(--color-muted);
   padding: 16px 16px 8px 16px;
   font-weight: 600;
   letter-spacing: 1px;
@@ -587,13 +684,13 @@ body {
 .comment-sidebar-empty {
   padding: 8px 4px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--color-muted);
 }
 
 .comment-sidebar-error {
   padding: 8px 4px;
   font-size: 13px;
-  color: #f87171;
+  color: var(--color-danger);
 }
 
 .comment-pane-group {
@@ -604,15 +701,15 @@ body {
 
 .comment-pane-group-title {
   font-size: 12px;
-  color: var(--text-secondary);
+  color: var(--color-muted);
   font-weight: 600;
   padding: 4px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .comment-item {
-  background-color: var(--bg-tertiary);
-  border: 1px solid var(--border);
+  background-color: var(--color-panel2);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 10px;
   cursor: pointer;
@@ -623,7 +720,7 @@ body {
 }
 
 .comment-item:hover {
-  border-color: var(--accent);
+  border-color: var(--color-accent);
 }
 
 .comment-item-resolved {
@@ -640,7 +737,7 @@ body {
 .comment-item-line {
   font-size: 12px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--color-accent);
 }
 
 .badge {
@@ -652,13 +749,13 @@ body {
 }
 
 .badge-resolved {
-  background-color: rgba(34, 197, 94, 0.15);
-  color: #4ade80;
+  background-color: color-mix(in srgb, var(--color-success) 20%, transparent);
+  color: var(--color-success);
 }
 
 .badge-orphaned {
-  background-color: rgba(248, 113, 113, 0.15);
-  color: #f87171;
+  background-color: color-mix(in srgb, var(--color-danger) 20%, transparent);
+  color: var(--color-danger);
 }
 
 .comment-item-body {
@@ -672,7 +769,7 @@ body {
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  color: var(--text-secondary);
+  color: var(--color-muted);
 }
 
 .comment-item-actions {
@@ -691,9 +788,9 @@ body {
   width: 100%;
   min-height: 60px;
   resize: vertical;
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  border: 1px solid var(--border);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
   border-radius: 6px;
   padding: 8px;
   font-family: var(--font-sans);
@@ -702,20 +799,20 @@ body {
 
 .comment-edit-textarea:focus {
   outline: none;
-  border-color: var(--accent);
+  border-color: var(--color-accent);
 }
 
 .btn-link {
   background: transparent;
   border: none;
-  color: var(--text-secondary);
+  color: var(--color-muted);
   font-size: 12px;
   cursor: pointer;
   padding: 0;
 }
 
 .btn-link:hover:not(:disabled) {
-  color: var(--accent);
+  color: var(--color-accent);
   text-decoration: underline;
 }
 
@@ -725,14 +822,15 @@ body {
 }
 
 .btn-link-danger:hover:not(:disabled) {
-  color: #f87171;
+  color: var(--color-danger);
 }
 
 /* Overlay Sticky Notes */
 .sticky-note {
-  background-color: var(--bg-secondary);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent);
+  background-color: var(--color-note);
+  border: 1px solid var(--color-note-border);
+  border-left: 3px solid var(--color-accent);
+  color: var(--color-note-text);
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 12px;
@@ -756,12 +854,12 @@ body {
 }
 
 .sticky-note-resolved {
-  border-left-color: #4ade80;
+  border-left-color: var(--color-success);
   opacity: 0.75;
 }
 
 .sticky-note-orphaned {
-  border-left-color: #f87171;
+  border-left-color: var(--color-danger);
 }
 
 .sticky-note-meta {
@@ -788,18 +886,18 @@ body {
 .sticky-note-line {
   font-size: 11px;
   font-weight: 600;
-  color: var(--accent);
+  color: var(--color-accent);
 }
 
 .sticky-note-excerpt {
-  color: var(--text-primary);
+  color: var(--color-note-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .sticky-note-body {
-  color: var(--text-primary);
+  color: var(--color-note-text);
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -807,7 +905,8 @@ body {
 
 .sticky-note-footer {
   font-size: 10px;
-  color: var(--text-secondary);
+  color: var(--color-note-text);
+  opacity: 0.7;
 }
 
 .sticky-note-edit {
@@ -825,8 +924,8 @@ body {
   width: 232px;
   max-height: 45%;
   overflow-y: auto;
-  background-color: rgba(26, 26, 30, 0.95);
-  border: 1px solid var(--border);
+  background-color: color-mix(in srgb, var(--color-panel) 95%, transparent);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   padding: 8px;
   z-index: 70;
@@ -838,7 +937,7 @@ body {
 .orphan-zone-title {
   font-size: 11px;
   font-weight: 600;
-  color: #f87171;
+  color: var(--color-danger);
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
