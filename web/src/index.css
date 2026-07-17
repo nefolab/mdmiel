@@ -829,84 +829,170 @@ body {
 .sticky-note {
   background-color: var(--color-note);
   border: 1px solid var(--color-note-border);
-  border-left: 3px solid var(--color-accent);
   color: var(--color-note-text);
-  border-radius: 6px;
-  padding: 8px 10px;
-  font-size: 12px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.35);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px -6px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  gap: 4px;
 }
 
 .sticky-note-floating {
   position: absolute;
   right: 12px;
-  width: 220px;
+  width: 236px;
   z-index: 50;
 }
 
 .sticky-note-expanded {
   z-index: 60;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-}
-
-.sticky-note-resolved {
-  border-left-color: var(--color-success);
-  opacity: 0.75;
+  box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.45);
 }
 
 .sticky-note-orphaned {
-  border-left-color: var(--color-danger);
-}
-
-.sticky-note-meta {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-/* Floating notes are draggable via their header; orphan-zone notes are not. */
-.sticky-note-floating .sticky-note-meta {
-  cursor: grab;
-  touch-action: none;
+  border-style: dashed;
+  border-color: var(--color-accent);
 }
 
 .sticky-note-dragging {
   user-select: none;
 }
 
-.sticky-note-dragging .sticky-note-meta {
+/* Header: author dot + name + badges + line number. Doubles as the drag
+   handle for floating notes; orphan-zone notes render it but aren't draggable. */
+.sticky-note-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  background-color: rgba(0, 0, 0, 0.05);
+  border-bottom: 1px solid var(--color-note-border);
+}
+
+.sticky-note-floating .sticky-note-header {
+  cursor: grab;
+  touch-action: none;
+}
+
+.sticky-note-dragging .sticky-note-header {
   cursor: grabbing;
 }
 
-.sticky-note-line {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-accent);
+.sticky-note-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background-color: var(--color-accent);
+  flex: none;
 }
 
-.sticky-note-excerpt {
-  color: var(--color-note-text);
+.sticky-note-resolved .sticky-note-dot {
+  background-color: var(--color-muted);
+}
+
+.sticky-note-author {
+  font-size: 11.5px;
+  font-weight: 600;
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.sticky-note-body {
-  color: var(--color-note-text);
+.sticky-note-badge-resolved {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  background-color: var(--color-muted);
+  color: var(--color-note);
+  border-radius: 4px;
+  padding: 1px 5px;
+  flex: none;
+}
+
+.sticky-note-line {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  opacity: 0.5;
+  flex: none;
+}
+
+.sticky-note-excerpt {
+  padding: 7px 10px 9px;
+  font-size: 12px;
   line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sticky-note-content {
+  padding: 8px 10px 10px;
+  display: flex;
+  flex-direction: column;
+}
+
+.sticky-note-body {
+  font-size: 12.5px;
+  line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-.sticky-note-footer {
-  font-size: 10px;
+.sticky-note-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 9px;
+}
+
+.sticky-note-btn-resolve,
+.sticky-note-btn-edit,
+.sticky-note-btn-delete {
+  font-size: 11px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.sticky-note-btn-resolve {
+  font-weight: 600;
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent);
+}
+
+.sticky-note-btn-resolve:hover:not(:disabled) {
+  background-color: var(--color-accent-soft);
+}
+
+.sticky-note-btn-edit {
+  border: 1px solid var(--color-note-border);
   color: var(--color-note-text);
-  opacity: 0.7;
+}
+
+.sticky-note-btn-edit:hover:not(:disabled) {
+  background-color: rgba(0, 0, 0, 0.05);
+}
+
+.sticky-note-btn-delete {
+  border: none;
+  color: var(--color-danger);
+  margin-left: auto;
+}
+
+.sticky-note-btn-delete:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.sticky-note-btn-resolve:disabled,
+.sticky-note-btn-edit:disabled,
+.sticky-note-btn-delete:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .sticky-note-edit {
@@ -916,34 +1002,53 @@ body {
   cursor: default;
 }
 
-/* Orphaned ( unresolvable ) notes zone, pinned to the pane corner */
+/* Orphaned ( unresolvable ) notes zone: a bar pinned to the pane's bottom
+   edge ( position: absolute within the pane-content viewport, so it stays
+   put whether the markdown body scrolls internally or an html iframe fills
+   the pane — see docs/design/mock.html "未解決ゾーン" ). */
 .orphan-zone {
   position: absolute;
-  bottom: 12px;
-  right: 12px;
-  width: 232px;
-  max-height: 45%;
-  overflow-y: auto;
-  background-color: color-mix(in srgb, var(--color-panel) 95%, transparent);
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  padding: 8px;
-  z-index: 70;
+  left: 14px;
+  right: 14px;
+  bottom: 0;
+  max-height: 40%;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  background-color: var(--color-panel2);
+  border: 1px solid var(--color-border);
+  border-top: 2px solid var(--color-accent);
+  border-radius: 10px 10px 0 0;
+  box-shadow: 0 -8px 20px -12px rgba(0, 0, 0, 0.3);
+  padding: 12px 14px;
+  z-index: 70;
 }
 
-.orphan-zone-title {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--color-danger);
+.orphan-zone-label {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  color: var(--color-accent);
+  margin-bottom: 8px;
+}
+
+.orphan-zone-label-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-accent);
+  flex: none;
 }
 
 .orphan-zone-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }

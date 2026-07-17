@@ -6,6 +6,7 @@ import {
   stackNotes,
   nextOffset,
   partitionStackable,
+  combineUnresolved,
   NotePlacementInput,
   NoteOffset,
 } from '../lib/stickyLayout';
@@ -195,7 +196,7 @@ export function StickyNoteLayer({
   );
   // Both truly-orphaned notes and notes whose anchor element is absent go to
   // the pane's unresolved zone instead of vanishing silently.
-  const unresolved = [...orphaned, ...missing];
+  const unresolved = combineUnresolved(orphaned, missing);
 
   return (
     <>
@@ -218,7 +219,10 @@ export function StickyNoteLayer({
 
       {unresolved.length > 0 && (
         <div className="orphan-zone">
-          <div className="orphan-zone-title">未解決 ( {unresolved.length} )</div>
+          <div className="orphan-zone-label">
+            <span className="orphan-zone-label-dot" />
+            未解決ゾーン ( orphaned )
+          </div>
           <div className="orphan-zone-list">
             {unresolved.map((p) => (
               <StickyNote
@@ -383,73 +387,74 @@ function StickyNote({
   return (
     <div className={className} style={noteStyle} onClick={handleNoteClick}>
       <div
-        className="sticky-note-meta"
+        className="sticky-note-header"
         onPointerDown={floating ? handleHeaderPointerDown : undefined}
         onPointerMove={floating ? handleHeaderPointerMove : undefined}
         onPointerUp={floating ? handleHeaderPointerUp : undefined}
         onPointerCancel={floating ? handleHeaderPointerCancel : undefined}
         onLostPointerCapture={floating ? handleHeaderLostPointerCapture : undefined}
       >
-        <span className="sticky-note-line">行 {line}</span>
+        <span className="sticky-note-dot" />
+        <span className="sticky-note-author">{comment.author}</span>
         {orphaned && <span className="badge badge-orphaned">未解決</span>}
-        {comment.resolved && <span className="badge badge-resolved">解決済み</span>}
+        {comment.resolved && <span className="sticky-note-badge-resolved">解決済み</span>}
+        <span className="sticky-note-line">L{line}</span>
       </div>
 
       {!expanded && <div className="sticky-note-excerpt">{excerpt(comment.body)}</div>}
 
-      {expanded && !editing && <div className="sticky-note-body">{comment.body}</div>}
-
-      {expanded && editing && (
-        <div className="sticky-note-edit" onClick={(e) => e.stopPropagation()}>
-          <textarea
-            className="comment-edit-textarea"
-            value={editBody}
-            autoFocus
-            onChange={(e) => setEditBody(e.target.value)}
-            disabled={isBusy}
-          />
-          <div className="comment-item-actions">
-            <button className="btn-secondary" onClick={cancelEdit} disabled={isBusy}>
-              キャンセル
+      {expanded && !editing && (
+        <div className="sticky-note-content">
+          <div className="sticky-note-body">{comment.body}</div>
+          <div className="sticky-note-actions" onClick={(e) => e.stopPropagation()}>
+            <button
+              className="sticky-note-btn-resolve"
+              onClick={(e) => {
+                e.stopPropagation();
+                actions.toggleResolved(comment);
+              }}
+              disabled={isBusy}
+            >
+              {comment.resolved ? '未解決に戻す' : '解決済みにする'}
             </button>
-            <button className="btn-primary" onClick={saveEdit} disabled={isBusy || !editBody.trim()}>
-              保存
+            <button className="sticky-note-btn-edit" onClick={startEdit} disabled={isBusy}>
+              編集
+            </button>
+            <button
+              className="sticky-note-btn-delete"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm('このコメントを削除しますか?')) {
+                  actions.remove(comment.id);
+                }
+              }}
+              disabled={isBusy}
+            >
+              削除
             </button>
           </div>
         </div>
       )}
 
-      <div className="sticky-note-footer">
-        <span className="sticky-note-author">{comment.author}</span>
-      </div>
-
-      {expanded && !editing && (
-        <div className="comment-item-actions" onClick={(e) => e.stopPropagation()}>
-          <button className="btn-link" onClick={startEdit} disabled={isBusy}>
-            編集
-          </button>
-          <button
-            className="btn-link"
-            onClick={(e) => {
-              e.stopPropagation();
-              actions.toggleResolved(comment);
-            }}
-            disabled={isBusy}
-          >
-            {comment.resolved ? '未解決に戻す' : '解決済みにする'}
-          </button>
-          <button
-            className="btn-link btn-link-danger"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (window.confirm('このコメントを削除しますか?')) {
-                actions.remove(comment.id);
-              }
-            }}
-            disabled={isBusy}
-          >
-            削除
-          </button>
+      {expanded && editing && (
+        <div className="sticky-note-content">
+          <div className="sticky-note-edit" onClick={(e) => e.stopPropagation()}>
+            <textarea
+              className="comment-edit-textarea"
+              value={editBody}
+              autoFocus
+              onChange={(e) => setEditBody(e.target.value)}
+              disabled={isBusy}
+            />
+            <div className="comment-item-actions">
+              <button className="btn-secondary" onClick={cancelEdit} disabled={isBusy}>
+                キャンセル
+              </button>
+              <button className="btn-primary" onClick={saveEdit} disabled={isBusy || !editBody.trim()}>
+                保存
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
