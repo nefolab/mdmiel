@@ -6,6 +6,7 @@ import {
   clampOffset,
   nextOffset,
   partitionStackable,
+  combineUnresolved,
 } from './stickyLayout';
 import { Comment, computeSnippet, snippetHash } from './comments';
 
@@ -179,6 +180,35 @@ describe('partitionStackable', () => {
     const { stackable, offset } = partitionStackable<{ id: string }>([], () => false);
     expect(stackable).toEqual([]);
     expect(offset).toEqual([]);
+  });
+});
+
+describe('combineUnresolved', () => {
+  it('concatenates orphaned before missing, preserving each list\'s own order', () => {
+    const o1 = makeComment('o1', 1, 'a');
+    const o2 = makeComment('o2', 2, 'b');
+    const m1 = makeComment('m1', 3, 'c');
+    const m2 = makeComment('m2', 4, 'd');
+    const orphaned = [
+      { comment: o1, line: 1, orphaned: true },
+      { comment: o2, line: 2, orphaned: true },
+    ];
+    const missing = [
+      { comment: m1, line: 3, orphaned: false },
+      { comment: m2, line: 4, orphaned: false },
+    ];
+    const result = combineUnresolved(orphaned, missing);
+    expect(result.map((p) => p.comment.id)).toEqual(['o1', 'o2', 'm1', 'm2']);
+  });
+
+  it('returns an empty array when both inputs are empty', () => {
+    expect(combineUnresolved([], [])).toEqual([]);
+  });
+
+  it('returns just the orphaned list unchanged when missing is empty', () => {
+    const o1 = makeComment('o1', 1, 'a');
+    const orphaned = [{ comment: o1, line: 1, orphaned: true }];
+    expect(combineUnresolved(orphaned, [])).toEqual(orphaned);
   });
 });
 

@@ -73,6 +73,21 @@ export function splitOrphaned(
   return { placed, orphaned, missing };
 }
 
+/**
+ * Combines truly-orphaned placements (rematchLine reported orphaned:true)
+ * with "missing" placements (anchor line still resolves but has no DOM
+ * element to pin to) into the single ordered list rendered in the pane's
+ * unresolved zone. Orphaned entries come first, then missing, each
+ * preserving its own relative order — callers should not rely on any other
+ * ordering (e.g. by line number).
+ */
+export function combineUnresolved(
+  orphaned: ResolvedPlacement[],
+  missing: ResolvedPlacement[]
+): ResolvedPlacement[] {
+  return [...orphaned, ...missing];
+}
+
 export interface NotePlacementInput {
   id: string;
   /** Ideal top coordinate derived from the anchored element's position. */

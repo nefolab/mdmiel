@@ -6,6 +6,7 @@ import {
   stackNotes,
   nextOffset,
   partitionStackable,
+  combineUnresolved,
   NotePlacementInput,
   NoteOffset,
 } from '../lib/stickyLayout';
@@ -195,7 +196,7 @@ export function StickyNoteLayer({
   );
   // Both truly-orphaned notes and notes whose anchor element is absent go to
   // the pane's unresolved zone instead of vanishing silently.
-  const unresolved = [...orphaned, ...missing];
+  const unresolved = combineUnresolved(orphaned, missing);
 
   return (
     <>
@@ -218,7 +219,10 @@ export function StickyNoteLayer({
 
       {unresolved.length > 0 && (
         <div className="orphan-zone">
-          <div className="orphan-zone-title">未解決 ( {unresolved.length} )</div>
+          <div className="orphan-zone-label">
+            <span className="orphan-zone-label-dot" />
+            未解決ゾーン ( orphaned )
+          </div>
           <div className="orphan-zone-list">
             {unresolved.map((p) => (
               <StickyNote
