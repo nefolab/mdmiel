@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>mdmiel — AI成果物のレビュー基地</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #2c2822; display: flex; align-items: center; justify-content: center; min-height: 100vh; font-family: -apple-system, BlinkMacSystemFont, sans-serif; }
+    #__bundler_loading { position: fixed; bottom: 20px; right: 20px; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #666; background: #fff; padding: 8px 14px; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.12); z-index: 10000; }
+    #__bundler_thumbnail { position: fixed; inset: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; background: #2c2822; z-index: 9999; }
+    #__bundler_thumbnail svg { width: 100%; height: 100%; object-fit: contain; }
+    #__bundler_placeholder { color: #999; font-size: 14px; }
+  </style>
+  <noscript>
+    <style>#__bundler_loading { display: none; }</style>
+    <div style="position:fixed;bottom:12px;left:12px;font:13px/1.4 -apple-system,BlinkMacSystemFont,sans-serif;color:#999;background:rgba(255,255,255,0.9);padding:6px 12px;border-radius:6px;box-shadow:0 1px 4px rgba(0,0,0,0.08);z-index:10000;">
+      This page requires JavaScript to display.
+    </div>
+  </noscript>
+</head>
+<body>
+  <div id="__bundler_thumbnail">
+  <svg viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg">
+    <rect width="1200" height="800" fill="#2c2822"></rect>
+    <rect x="360" y="300" width="480" height="150" rx="14" fill="#fff2b0" stroke="#ecd67a" stroke-width="4"></rect>
+    <text x="600" y="270" font-family="monospace" font-size="72" font-weight="700" fill="#faf6ec" text-anchor="middle">mdmiel</text>
+    <rect x="392" y="340" width="360" height="14" rx="7" fill="#a8572a"></rect>
+    <rect x="392" y="372" width="300" height="12" rx="6" fill="#c9a86a"></rect>
+    <rect x="392" y="398" width="240" height="12" rx="6" fill="#c9a86a"></rect>
+  </svg>
+</div>
+  <div id="__bundler_loading">Unpacking...</div>
+
+  <script>
+    
+document.addEventListener('DOMContentLoaded', async function() {
+  const loading = document.getElementById('__bundler_loading');
+  function setStatus(msg) { if (loading) loading.textContent = msg; }
+
+  const FONT_MIME = /^(font[/]|application[/](x-)?font-|application[/]vnd\.ms-fontobject)/i;
+  const MIME_TOKEN = /^[\w.+-]+[/][\w.+-]+$/;
+  function toBase64(bytes) {
+    let bin = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(bin);
+  }
+
+  // Error sink persists across replaceWith since it's on window, not the DOM.
+  window.addEventListener('error', function(e) {
+    // Failed resource loads (CSP-blocked links, scripts, images) fire plain
+    // events at the element — warn only; real JS errors carry message/error.
+    if (!e.message && !e.error && e.target && e.target !== window) {
+      console.warn('[bundle] resource failed to load:',
+        e.target.tagName, String(e.target.src || e.target.href || ''));
+      return;
+    }
+    var p = document.body || document.documentElement;
+    var d = document.getElementById('__bundler_err') || p.appendChild(document.createElement('div'));
+    d.id = '__bundler_err';
+    d.style.cssText = 'position:fixed;bottom:12px;left:12px;right:12px;font:12px/1.4 ui-monospace,monospace;background:#2a1215;color:#ff8a80;padding:10px 14px;border-radius:8px;border:1px solid #5c2b2e;z-index:99999;white-space:pre-wrap;max-height:40vh;overflow:auto';
+    d.textContent = (d.textContent ? d.textContent + String.fromCharCode(10) : '') +
+      '[bundle] ' + (e.message || e.type) +
+      (e.filename ? ' (' + e.filename.slice(0, 60) + ':' + e.lineno + ')' : '');
+  }, true);
+
+  try {
+    const manifestEl = document.querySelector('script[type="__bundler/manifest"]');
+    const templateEl = document.querySelector('script[type="__bundler/template"]');
+    if (!manifestEl || !templateEl) {
+      setStatus('Error: missing bundle data');
+      console.error('[bundler] Missing script tags — manifestEl:', !!manifestEl, 'templateEl:', !!templateEl);
+      return;
+    }
+
+    const manifest = JSON.parse(manifestEl.textContent);
+    let template = JSON.parse(templateEl.textContent);
+
+    const uuids = Object.keys(manifest);
+    setStatus('Unpacking ' + uuids.length + ' assets...');
+
+    const blobUrls = {};
+    const resourceBlobs = {};
+    await Promise.all(uuids.map(async (uuid) => {
+      const entry = manifest[uuid];
+      try {
+        const binaryStr = atob(entry.data);
+        const bytes = new Uint8Array(binaryStr.length);
+        for (let i = 0; i < binaryStr.length; i++) bytes[i] = binaryStr.charCodeAt(i);
+
+        let finalBytes = bytes;
+        if (entry.compressed) {
+          if (typeof DecompressionStream !== 'undefined') {
+            const ds = new DecompressionStream('gzip');
+            const writer = ds.writable.getWriter();
+            const reader = ds.readable.getReader();
+            writer.write(bytes);
+            writer.close();
+            const chunks = [];
+            let totalLen = 0;
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              chunks.push(value);
+              totalLen += value.length;
+            }
+            finalBytes = new Uint8Array(totalLen);
+            let offset = 0;
+            for (const chunk of chunks) { finalBytes.set(chunk, offset); offset += chunk.length; }
+          } else {
+            console.warn('DecompressionStream not available, asset ' + uuid + ' may not render');
+          }
+        }
+
+        if (FONT_MIME.test(entry.mime) && MIME_TOKEN.test(entry.mime)) {
+          // Strict artifact hosts allow font-src data: but not blob:.
+          blobUrls[uuid] = 'data:' + entry.mime + ';base64,' +
+            (entry.compressed ? toBase64(finalBytes) : entry.data);
+        } else {
+          const blob = new Blob([finalBytes], { type: entry.mime });
+          blobUrls[uuid] = URL.createObjectURL(blob);
+          resourceBlobs[blobUrls[uuid]] = blob;
+        }
+      } catch (err) {
+        console.error('Failed to decode asset ' + uuid + ':', err);
+        const blob = new Blob([], { type: entry.mime });
+        blobUrls[uuid] = URL.createObjectURL(blob);
+        resourceBlobs[blobUrls[uuid]] = blob;
+      }
+    }));
+
+    const extResEl = document.querySelector('script[type="__bundler/ext_resources"]');
+    const extResources = extResEl ? JSON.parse(extResEl.textContent) : [];
+    const resourceMap = {};
+    for (const entry of extResources) {
+      if (blobUrls[entry.uuid]) resourceMap[entry.id] = blobUrls[entry.uuid];
+    }
+
+    // Artifact-host CSP (connect-src 'self') refuses fetch() of blob: URLs —
+    // consumers read these Blobs directly. Survives the swap like the error sink.
+    window.__resourceBlobs = resourceBlobs;
+
+    setStatus('Rendering...');
+    for (const uuid of uuids) template = template.split(uuid).join(blobUrls[uuid]);
+
+    // Strip integrity + crossorigin — blob URLs from a file:// document inherit
+    // a null origin, so crossorigin forces a CORS fetch that SRI then rejects.
+    // The manifest bytes are ours; SRI protects against CDN compromise, not this.
+    template = template.replace(/\s+integrity="[^"]*"/gi, '').replace(/\s+crossorigin="[^"]*"/gi, '');
+
+    const resourceScript = '<script>window.__resources = ' +
+      JSON.stringify(resourceMap).replace(/<\//g, '<\\/') +
+      ';</' + 'script>';
+    // Inject after <head> so the DOCTYPE stays first; prepending the script
+    // would push the parser into quirks mode. DOMParser always emits a <head>
+    // (synthesizing one if the source HTML omitted it) but may carry
+    // attributes through, so match the full opening tag. slice() rather than
+    // replace() keeps us clear of $-pattern substitution in resourceScript.
+    const headOpen = template.match(/<head[^>]*>/i);
+    if (headOpen) {
+      const i = headOpen.index + headOpen[0].length;
+      template = template.slice(0, i) + resourceScript + template.slice(i);
+    }
+
+    // Parse the template and swap the root element. Scripts inserted via
+    // DOMParser/replaceWith are inert per spec — re-create each with
+    // createElement so they execute, awaiting onload for src scripts to
+    // preserve ordering (React before ReactDOM before Babel before text/babel).
+    const doc = new DOMParser().parseFromString(template, 'text/html');
+    document.documentElement.replaceWith(doc.documentElement);
+    const dead = Array.from(document.scripts);
+    for (const old of dead) {
+      const s = document.createElement('script');
+      for (const a of old.attributes) s.setAttribute(a.name, a.value);
+      s.textContent = old.textContent;
+      // text/babel scripts with a src: read and inline. transformScriptTags
+      // does XHR against the src, but blob:null/ from a file:// origin is
+      // silently dropped. Inlining makes it a plain inline babel script,
+      // which transformScriptTags handles unconditionally.
+      if ((s.type === 'text/babel' || s.type === 'text/jsx') && s.src) {
+        const pre = resourceBlobs[s.src.split('#')[0]];
+        s.textContent = pre ? await pre.text() : await (await fetch(s.src)).text();
+        s.removeAttribute('src');
+      }
+      const p = s.src ? new Promise(function(r) { s.onload = s.onerror = r; }) : null;
+      old.replaceWith(s);
+      if (p) await p;
+    }
+    // Babel standalone auto-transforms type=text/babel on DOMContentLoaded,
+    // which fired before we swapped the document. Trigger manually if present.
+    if (window.Babel && typeof window.Babel.transformScriptTags === 'function') {
+      window.Babel.transformScriptTags();
+    }
+  } catch (err) {
+    setStatus('Error unpacking: ' + err.message);
+    console.error('Bundle unpack error:', err);
+  }
+});
+
+  </script>
+
+  <script type="__bundler/manifest">
+{}
+  </script>
+
+  <script type="__bundler/ext_resources">
+[]
+  </script>
+
+  <script type="__bundler/template">
+"<!DOCTYPE html>\n<html lang=\"ja\"><head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>mdmiel — AI成果物のレビュー基地<\u002Ftitle>\n<style>\n  *{box-sizing:border-box;}\n  html,body{margin:0;padding:0;height:100%;}\n  body{\n    background:#efe9dd;color:#2c2822;\n    font-family:system-ui,-apple-system,\"Segoe UI\",sans-serif;\n    -webkit-font-smoothing:antialiased;\n  }\n  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}\n  ::-webkit-scrollbar{width:11px;height:11px;}\n  ::-webkit-scrollbar-thumb{background:rgba(120,110,90,.35);border-radius:6px;border:3px solid transparent;background-clip:padding-box;}\n  ::-webkit-scrollbar-track{background:transparent;}\n<\u002Fstyle>\n<\u002Fhead>\n<body>\n\n<div style=\"height:100vh;display:flex;flex-direction:column;overflow:hidden;\">\n\n  <!-- HEADER -->\n  <header style=\"flex:none;height:52px;display:flex;align-items:center;gap:16px;padding:0 18px;background:#2c2822;color:#faf6ec;border-bottom:1px solid #453f36;\">\n    <div style=\"display:flex;align-items:baseline;gap:9px;\">\n      <span class=\"mono\" style=\"font-weight:700;font-size:16px;letter-spacing:-.02em;\">mdmiel<\u002Fspan>\n      <span style=\"font-size:11px;opacity:.6;letter-spacing:.02em;\">AI成果物のレビュー基地<\u002Fspan>\n    <\u002Fdiv>\n    <div style=\"flex:1;\"><\u002Fdiv>\n    <div style=\"display:flex;align-items:center;gap:6px;\">\n      <span class=\"mono\" style=\"font-size:10.5px;opacity:.5;\">theme<\u002Fspan>\n      <div style=\"display:flex;background:rgba(255,255,255,.1);border-radius:8px;padding:2px;gap:2px;\">\n        <button class=\"mono\" style=\"font-size:10.5px;font-weight:500;padding:3px 9px;border:none;border-radius:6px;cursor:pointer;background:#a8572a;color:#fff;\">paper<\u002Fbutton>\n        <button class=\"mono\" style=\"font-size:10.5px;font-weight:500;padding:3px 9px;border:none;border-radius:6px;cursor:pointer;background:transparent;color:#faf6ec;opacity:.65;\">slate<\u002Fbutton>\n        <button class=\"mono\" style=\"font-size:10.5px;font-weight:500;padding:3px 9px;border:none;border-radius:6px;cursor:pointer;background:transparent;color:#faf6ec;opacity:.65;\">editorial<\u002Fbutton>\n      <\u002Fdiv>\n    <\u002Fdiv>\n    <div style=\"width:1px;height:22px;background:#453f36;margin:0 2px;\"><\u002Fdiv>\n    <div style=\"display:flex;background:rgba(255,255,255,.1);border-radius:8px;padding:2px;gap:2px;\">\n      <button class=\"mono\" style=\"font-size:11px;padding:3px 9px;border:none;border-radius:6px;cursor:pointer;letter-spacing:-1px;background:transparent;color:#faf6ec;opacity:.6;\">▊<\u002Fbutton>\n      <button class=\"mono\" style=\"font-size:11px;padding:3px 9px;border:none;border-radius:6px;cursor:pointer;letter-spacing:-1px;background:#a8572a;color:#fff;\">▊▊<\u002Fbutton>\n    <\u002Fdiv>\n    <button style=\"display:flex;align-items:center;gap:7px;font-size:12px;font-weight:600;padding:6px 11px;border:1px solid #453f36;border-radius:8px;background:transparent;color:#faf6ec;cursor:pointer;\">\n      <span>コメント<\u002Fspan>\n      <span class=\"mono\" style=\"font-size:11px;background:#a8572a;color:#2c2822;border-radius:20px;padding:1px 7px;font-weight:700;\">4<\u002Fspan>\n    <\u002Fbutton>\n  <\u002Fheader>\n\n  <!-- BODY -->\n  <div style=\"flex:1;display:flex;min-height:0;\">\n\n    <!-- SIDEBAR -->\n    <aside style=\"flex:none;width:236px;background:#f3ecdd;border-right:1px solid #e2dac6;display:flex;flex-direction:column;min-height:0;\">\n      <div style=\"flex:none;padding:13px 15px 9px;font-size:10.5px;letter-spacing:.09em;text-transform:uppercase;color:#8f8674;font-weight:600;\">ファイルツリー<\u002Fdiv>\n      <div style=\"flex:1;overflow:auto;padding:0 8px 12px;\">\n        <div style=\"display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:1px;background:#f0e2cf;color:#a8572a;font-weight:600;\">\n          <span style=\"font-size:13px;width:15px;text-align:center;\">📄<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:12.5px;flex:1;\">requirements.md<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:9.5px;background:#a8572a;color:#fff;border-radius:20px;padding:0 6px;min-width:18px;text-align:center;\">4<\u002Fspan>\n        <\u002Fdiv>\n        <div style=\"display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;cursor:pointer;margin-bottom:1px;background:#f0e2cf;color:#a8572a;font-weight:600;\">\n          <span style=\"font-size:13px;width:15px;text-align:center;\">🖼<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:12.5px;flex:1;\">mock.html<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:9.5px;background:#a8572a;color:#fff;border-radius:20px;padding:0 6px;min-width:18px;text-align:center;\">1<\u002Fspan>\n        <\u002Fdiv>\n        <div style=\"display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;margin-bottom:1px;color:#8f8674;opacity:.5;\">\n          <span style=\"font-size:13px;width:15px;text-align:center;\">📁<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:12.5px;flex:1;\">codetour/<\u002Fspan>\n        <\u002Fdiv>\n        <div style=\"display:flex;align-items:center;gap:8px;padding:6px 8px;border-radius:6px;margin-bottom:1px;color:#8f8674;opacity:.5;\">\n          <span style=\"font-size:13px;width:15px;text-align:center;\">🎨<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:12.5px;flex:1;\">styles.css<\u002Fspan>\n        <\u002Fdiv>\n        <div style=\"margin-top:10px;padding:0 8px;font-size:10.5px;color:#8f8674;line-height:1.6;\">\n          <div class=\"mono\" style=\"opacity:.7;\">.mdmiel/comments/<\u002Fdiv>\n        <\u002Fdiv>\n      <\u002Fdiv>\n    <\u002Faside>\n\n    <!-- CONTENT -->\n    <main style=\"flex:1;display:flex;min-width:0;position:relative;\">\n\n      <!-- LEFT PANE : requirements.md -->\n      <section style=\"flex:1;display:flex;flex-direction:column;min-width:0;background:#faf6ec;min-height:0;border-right:1px solid #e2dac6;\">\n        <div style=\"flex:none;height:38px;display:flex;align-items:center;gap:10px;padding:0 12px;background:#f3ecdd;border-bottom:1px solid #e2dac6;\">\n          <span style=\"font-size:12px;\">📄<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:12px;font-weight:500;flex:1;\">requirements.md<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:11px;color:#8f8674;\">4 コメント<\u002Fspan>\n        <\u002Fdiv>\n        <div style=\"flex:1;overflow:auto;position:relative;\">\n          <div style=\"padding:20px 26px 40px;\">\n\n            <!-- lines -->\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">1<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:25px;font-weight:700;letter-spacing:-.02em;padding:6px 0 2px;line-height:1.3;\">mdmiel 要件定義書<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">2<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:13.5px;line-height:1.7;padding:1px 0 1px 8px;\">•&nbsp;&nbsp;&nbsp;ステータス: 実装反映済み ( フェーズ2.6まで )。フェーズ3以降は計画<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">3<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:13.5px;line-height:1.7;padding:1px 0 1px 8px;\">•&nbsp;&nbsp;&nbsp;最終更新: 2026-07-14<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">5<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:18px;font-weight:700;padding:14px 0 2px;line-height:1.3;border-top:1px solid #e2dac6;margin-top:6px;\">背景・課題<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;position:relative;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">7<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:13.5px;line-height:1.7;padding:1px 0 1px 8px;\">•&nbsp;&nbsp;&nbsp;要件の文章と画面イメージが別ファイルで、対応関係を見比べられない<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">9<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:18px;font-weight:700;padding:14px 0 2px;line-height:1.3;border-top:1px solid #e2dac6;margin-top:6px;\">機能要件<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n\n            <!-- table -->\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">11<\u002Fspan>\n              <div style=\"flex:1;\">\n                <div style=\"display:flex;border:1px solid #e2dac6;border-radius:5px;overflow:hidden;background:#f3ecdd;\">\n                  <div class=\"mono\" style=\"flex:0 0 48px;font-size:11.5px;line-height:1.5;padding:5px 10px;border-right:1px solid #e2dac6;\">#<\u002Fdiv>\n                  <div class=\"mono\" style=\"flex:1;font-size:11.5px;line-height:1.5;padding:5px 10px;border-right:1px solid #e2dac6;\">要件<\u002Fdiv>\n                  <div class=\"mono\" style=\"flex:0 0 96px;font-size:11.5px;line-height:1.5;padding:5px 10px;\">状態<\u002Fdiv>\n                <\u002Fdiv>\n              <\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;position:relative;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">13<\u002Fspan>\n              <div style=\"flex:1;\">\n                <div style=\"display:flex;border:1px solid #e2dac6;border-radius:5px;overflow:hidden;background:#faf6ec;\">\n                  <div class=\"mono\" style=\"flex:0 0 48px;font-size:11.5px;line-height:1.5;padding:5px 10px;border-right:1px solid #e2dac6;\">F5<\u002Fdiv>\n                  <div class=\"mono\" style=\"flex:1;font-size:11.5px;line-height:1.5;padding:5px 10px;border-right:1px solid #e2dac6;\">任意の行を指す共有用リンクURLを発行できる<\u002Fdiv>\n                  <div class=\"mono\" style=\"flex:0 0 96px;font-size:11.5px;line-height:1.5;padding:5px 10px;\">実装済み<\u002Fdiv>\n                <\u002Fdiv>\n              <\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">14<\u002Fspan>\n              <div style=\"flex:1;\">\n                <div style=\"display:flex;border:1px solid #e2dac6;border-radius:5px;overflow:hidden;background:#faf6ec;\">\n                  <div class=\"mono\" style=\"flex:0 0 48px;font-size:11.5px;line-height:1.5;padding:5px 10px;border-right:1px solid #e2dac6;\">F6<\u002Fdiv>\n                  <div class=\"mono\" style=\"flex:1;font-size:11.5px;line-height:1.5;padding:5px 10px;border-right:1px solid #e2dac6;\">行単位でコメントを追加・編集・削除・解決できる<\u002Fdiv>\n                  <div class=\"mono\" style=\"flex:0 0 96px;font-size:11.5px;line-height:1.5;padding:5px 10px;\">実装済み<\u002Fdiv>\n                <\u002Fdiv>\n              <\u002Fdiv>\n            <\u002Fdiv>\n\n            <!-- 画面要件 with sticky note -->\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">16<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:18px;font-weight:700;padding:14px 0 2px;line-height:1.3;border-top:1px solid #e2dac6;margin-top:6px;\">画面要件<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;position:relative;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">18<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:13.5px;line-height:1.7;padding:1px 0 1px 8px;\">•&nbsp;&nbsp;&nbsp;行アクション: 行の右クリックでメニューを固定表示し「リンクをコピー」「コメント追加」を提供する<\u002Fdiv><\u002Fdiv>\n              <!-- STICKY NOTE (collapsed) -->\n              <div style=\"position:absolute;left:calc(100% - 22px);top:0;z-index:20;\">\n                <div style=\"width:236px;background:#fff2b0;border:1px solid #ecd67a;border-radius:8px;box-shadow:0 6px 20px -6px rgba(0,0,0,.35);overflow:hidden;\">\n                  <div style=\"display:flex;align-items:center;gap:7px;padding:7px 9px;cursor:grab;background:rgba(0,0,0,.05);color:#3a3320;border-bottom:1px solid #ecd67a;\">\n                    <span style=\"width:7px;height:7px;border-radius:50%;background:#a8572a;flex:none;\"><\u002Fspan>\n                    <span style=\"font-size:11.5px;font-weight:600;flex:1;\">佐藤<\u002Fspan>\n                    <span class=\"mono\" style=\"font-size:9.5px;opacity:.5;\">L18<\u002Fspan>\n                  <\u002Fdiv>\n                  <div style=\"padding:7px 10px 9px;font-size:12px;line-height:1.5;color:#3a3320;\">ホバー起動を採用しない理由を一文だけ添えたい。レビ…<\u002Fdiv>\n                <\u002Fdiv>\n              <\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;position:relative;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">20<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:13.5px;line-height:1.7;padding:1px 0 1px 8px;\">•&nbsp;&nbsp;&nbsp;付箋カード: 対象行の横に重なって表示。折りたたみ時は本文抜粋+作者+バッジ、クリックで展開<\u002Fdiv><\u002Fdiv>\n              <!-- STICKY NOTE (expanded) -->\n              <div style=\"position:absolute;left:calc(100% - 22px);top:0;z-index:25;\">\n                <div style=\"width:236px;background:#fff2b0;border:1px solid #ecd67a;border-radius:8px;box-shadow:0 6px 20px -6px rgba(0,0,0,.35);overflow:hidden;\">\n                  <div style=\"display:flex;align-items:center;gap:7px;padding:7px 9px;cursor:grab;background:rgba(0,0,0,.05);color:#3a3320;border-bottom:1px solid #ecd67a;\">\n                    <span style=\"width:7px;height:7px;border-radius:50%;background:#8f8674;flex:none;\"><\u002Fspan>\n                    <span style=\"font-size:11.5px;font-weight:600;flex:1;\">田中<\u002Fspan>\n                    <span class=\"mono\" style=\"font-size:8.5px;font-weight:700;letter-spacing:.04em;background:#8f8674;color:#fff2b0;border-radius:4px;padding:1px 5px;\">resolved<\u002Fspan>\n                    <span class=\"mono\" style=\"font-size:9.5px;opacity:.5;\">L20<\u002Fspan>\n                  <\u002Fdiv>\n                  <div style=\"padding:8px 10px 10px;\">\n                    <div style=\"font-size:12.5px;line-height:1.6;color:#3a3320;\">折りたたみ⇄展開のアニメーションは軽めに。展開時に隣の付箋と重ならないよう z-index を上げる挙動、良いですね。<\u002Fdiv>\n                    <div style=\"display:flex;gap:6px;margin-top:9px;flex-wrap:wrap;\">\n                      <button style=\"font-size:11px;font-weight:600;padding:5px 10px;border:1px solid #a8572a;border-radius:6px;background:transparent;color:#a8572a;cursor:pointer;\">未解決に戻す<\u002Fbutton>\n                      <button style=\"font-size:11px;padding:5px 10px;border:1px solid #ecd67a;border-radius:6px;background:transparent;color:#3a3320;cursor:pointer;\">編集<\u002Fbutton>\n                      <button style=\"font-size:11px;padding:5px 10px;border:none;border-radius:6px;background:transparent;color:#c0392b;cursor:pointer;margin-left:auto;\">削除<\u002Fbutton>\n                    <\u002Fdiv>\n                  <\u002Fdiv>\n                <\u002Fdiv>\n              <\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"display:flex;align-items:flex-start;padding:1px 0;\">\n              <span class=\"mono\" style=\"flex:none;width:34px;text-align:right;padding-right:12px;font-size:11px;color:#8f8674;opacity:.6;padding-top:2px;\">22<\u002Fspan>\n              <div style=\"flex:1;\"><div style=\"font-size:13.5px;line-height:1.7;padding:1px 0 1px 8px;\">•&nbsp;&nbsp;&nbsp;未解決ゾーン: 行に貼れなくなった付箋をペイン端にまとめて表示<\u002Fdiv><\u002Fdiv>\n            <\u002Fdiv>\n            <div style=\"height:70px;\"><\u002Fdiv>\n          <\u002Fdiv>\n\n          <!-- ORPHANED ZONE -->\n          <div style=\"position:sticky;bottom:0;margin:0 14px;background:#f3ecdd;border:1px solid #e2dac6;border-top:2px solid #a8572a;border-radius:10px 10px 0 0;padding:12px 14px;box-shadow:0 -8px 20px -12px rgba(0,0,0,.3);\">\n            <div style=\"font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#a8572a;margin-bottom:8px;display:flex;align-items:center;gap:6px;\">\n              <span style=\"width:6px;height:6px;border-radius:50%;background:#a8572a;\"><\u002Fspan> 未解決ゾーン（orphaned）\n            <\u002Fdiv>\n            <div style=\"background:#fff2b0;border:1px dashed #a8572a;border-radius:8px;padding:9px 11px;\">\n              <div style=\"display:flex;align-items:center;gap:7px;margin-bottom:5px;\">\n                <span class=\"mono\" style=\"font-size:8.5px;font-weight:700;background:#a8572a;color:#fff;border-radius:4px;padding:1px 6px;\">orphaned<\u002Fspan>\n                <span style=\"font-size:11px;font-weight:600;\">鈴木<\u002Fspan>\n              <\u002Fdiv>\n              <div style=\"font-size:12px;line-height:1.5;color:#3a3320;\">この段落は前版で削除されたため宙に浮いています（行が消えたので追従不能）。<\u002Fdiv>\n              <button style=\"font-size:10.5px;padding:3px 8px;border:none;border-radius:5px;background:transparent;color:#c0392b;cursor:pointer;margin-top:6px;\">削除<\u002Fbutton>\n            <\u002Fdiv>\n          <\u002Fdiv>\n        <\u002Fdiv>\n      <\u002Fsection>\n\n      <!-- RIGHT PANE : mock.html preview -->\n      <section style=\"flex:1;display:flex;flex-direction:column;min-width:0;background:#faf6ec;min-height:0;\">\n        <div style=\"flex:none;height:38px;display:flex;align-items:center;gap:10px;padding:0 12px;background:#f3ecdd;border-bottom:1px solid #e2dac6;\">\n          <span style=\"font-size:12px;\">🖼<\u002Fspan>\n          <span class=\"mono\" style=\"font-size:12px;font-weight:500;flex:1;\">mock.html<\u002Fspan>\n          <div style=\"display:flex;background:rgba(0,0,0,.06);border-radius:7px;padding:2px;gap:2px;\">\n            <button class=\"mono\" style=\"font-size:10.5px;font-weight:500;padding:3px 9px;border:none;border-radius:5px;cursor:pointer;background:#a8572a;color:#fff;\">プレビュー<\u002Fbutton>\n            <button class=\"mono\" style=\"font-size:10.5px;font-weight:500;padding:3px 9px;border:none;border-radius:5px;cursor:pointer;background:transparent;color:#8f8674;\">ソース<\u002Fbutton>\n          <\u002Fdiv>\n          <span class=\"mono\" style=\"font-size:11px;color:#8f8674;\">1 コメント<\u002Fspan>\n          <button style=\"width:24px;height:24px;border:none;border-radius:6px;background:transparent;color:#8f8674;cursor:pointer;font-size:12px;\">✕<\u002Fbutton>\n        <\u002Fdiv>\n        <div style=\"flex:1;overflow:auto;position:relative;\">\n          <div style=\"padding:18px;min-height:100%;\">\n            <div style=\"max-width:640px;margin:0 auto;border:1px solid #e2dac6;border-radius:10px;overflow:hidden;background:#faf6ec;box-shadow:0 10px 34px -14px rgba(0,0,0,.4);\">\n              <div style=\"display:flex;align-items:center;gap:10px;padding:9px 14px;background:#2c2822;color:#faf6ec;\">\n                <span class=\"mono\" style=\"font-weight:700;font-size:13px;\">mdmiel<\u002Fspan>\n                <span style=\"flex:1;\"><\u002Fspan>\n                <span style=\"font-size:10px;border:1px solid currentColor;border-radius:6px;padding:2px 8px;opacity:.7;\">コメント<\u002Fspan>\n              <\u002Fdiv>\n              <div style=\"display:flex;height:250px;\">\n                <div style=\"flex:0 0 130px;padding:12px;background:#f3ecdd;border-right:1px solid #e2dac6;color:#2c2822;\">\n                  <div style=\"font-size:9px;text-transform:uppercase;letter-spacing:.08em;opacity:.5;margin-bottom:8px;\">ツリー<\u002Fdiv>\n                  <div class=\"mono\" style=\"font-size:10.5px;opacity:.85;margin-bottom:5px;\">📄 requirements.md<\u002Fdiv>\n                  <div class=\"mono\" style=\"font-size:10.5px;opacity:.85;\">🖼 mock.html<\u002Fdiv>\n                <\u002Fdiv>\n                <div style=\"flex:1;display:flex;\">\n                  <div style=\"flex:1;padding:14px;position:relative;border-right:1px solid #e2dac6;\">\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:100%;\"><\u002Fdiv>\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:100%;\"><\u002Fdiv>\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:70%;\"><\u002Fdiv>\n                    <div class=\"mono\" style=\"position:absolute;right:10px;top:52px;width:78px;font-size:9px;background:#fff2b0;color:#3a3320;border:1px solid #ecd67a;border-radius:5px;padding:6px 7px;box-shadow:0 4px 12px -3px rgba(0,0,0,.3);transform:rotate(-2deg);\">付箋<\u002Fdiv>\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:85%;\"><\u002Fdiv>\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:100%;\"><\u002Fdiv>\n                  <\u002Fdiv>\n                  <div style=\"flex:1;padding:14px;\">\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:100%;\"><\u002Fdiv>\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:60%;\"><\u002Fdiv>\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:100%;\"><\u002Fdiv>\n                    <div style=\"height:8px;border-radius:4px;background:#e2dac6;margin-bottom:9px;width:75%;\"><\u002Fdiv>\n                  <\u002Fdiv>\n                <\u002Fdiv>\n              <\u002Fdiv>\n            <\u002Fdiv>\n            <div class=\"mono\" style=\"margin-top:12px;font-size:10.5px;color:#8f8674;text-align:center;\">サンドボックス iframe プレビュー（相対パスの CSS/画像を解決）— コメントは「ソース」タブで行に貼れます<\u002Fdiv>\n          <\u002Fdiv>\n        <\u002Fdiv>\n      <\u002Fsection>\n\n    <\u002Fmain>\n  <\u002Fdiv>\n<\u002Fdiv>\n\n\n<\u002Fbody><\u002Fhtml>"
+  </script>
+</body>
+</html>
