@@ -412,7 +412,7 @@ export function SplitView({
 
   if (!leftPath) {
     return (
-      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+      <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-muted)' }}>
         サイドバーからファイルを選択してください。
       </div>
     );
@@ -525,7 +525,7 @@ export function SplitView({
           className={`pane-content ${leftData?.type === 'html' ? 'pane-content-iframe' : ''}`}
           onContextMenu={leftData?.type === 'markdown' ? (e) => handleMarkdownContextMenu(e, 'left') : undefined}
         >
-          {leftError && <div style={{ padding: '16px', color: 'red' }}>エラー: {leftError}</div>}
+          {leftError && <div style={{ padding: '16px', color: 'var(--color-danger)' }}>エラー: {leftError}</div>}
           {!leftError && leftData?.type === 'markdown' && (
             <div className="markdown-body" dangerouslySetInnerHTML={{ __html: leftData.renderedHtml }} />
           )}
@@ -568,7 +568,7 @@ export function SplitView({
             className={`pane-content ${rightData?.type === 'html' ? 'pane-content-iframe' : ''}`}
             onContextMenu={rightData?.type === 'markdown' ? (e) => handleMarkdownContextMenu(e, 'right') : undefined}
           >
-            {rightError && <div style={{ padding: '16px', color: 'red' }}>エラー: {rightError}</div>}
+            {rightError && <div style={{ padding: '16px', color: 'var(--color-danger)' }}>エラー: {rightError}</div>}
             {!rightError && rightData?.type === 'markdown' && (
               <div className="markdown-body" dangerouslySetInnerHTML={{ __html: rightData.renderedHtml }} />
             )}

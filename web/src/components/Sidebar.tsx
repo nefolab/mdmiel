@@ -129,7 +129,7 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile }: SidebarProps)
           )}
         </div>
         {node.isDir && !isCollapsed && (
-          <div style={{ borderLeft: '1px solid var(--border)', marginLeft: '8px' }}>
+          <div style={{ borderLeft: '1px solid var(--color-border)', marginLeft: '8px' }}>
             {Object.values(node.children)
               .sort((a, b) => {
                 if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
@@ -147,10 +147,10 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile }: SidebarProps)
   return (
     <aside className="sidebar">
       <div className="sidebar-title">ファイル一覧</div>
-      {loading && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--text-secondary)' }}>読み込み中...</div>}
-      {error && <div style={{ padding: '16px', fontSize: '14px', color: 'red' }}>エラー: {error}</div>}
+      {loading && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>読み込み中...</div>}
+      {error && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-danger)' }}>エラー: {error}</div>}
       {!loading && !error && files.length === 0 && (
-        <div style={{ padding: '16px', fontSize: '14px', color: 'var(--text-secondary)' }}>ファイルがありません</div>
+        <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>ファイルがありません</div>
       )}
       {!loading && !error && <div className="file-list">{renderNode(tree, 0)}</div>}
     </aside>
