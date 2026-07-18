@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseHash, generateHash, ViewState } from './anchor';
+import { parseHash, generateHash, ViewState, parseCommentRoute } from './anchor';
 
 describe('anchor url parsing and generation', () => {
   it('should parse and generate single file state', () => {
@@ -30,5 +30,27 @@ describe('anchor url parsing and generation', () => {
     expect(parseHash('')).toEqual({});
     expect(parseHash('#/')).toEqual({});
     expect(parseHash('#/invalid')).toEqual({});
+  });
+});
+
+describe('parseCommentRoute', () => {
+  it('parses a bare comment id', () => {
+    expect(parseCommentRoute('#/comment/abc123')).toEqual({ id: 'abc123' });
+  });
+
+  it('URL-decodes the id segment', () => {
+    expect(parseCommentRoute('#/comment/%E6%97%A5%E6%9C%AC%E8%AA%9E-id')).toEqual({ id: '日本語-id' });
+  });
+
+  it('truncates trailing path/query noise at the first / or ?', () => {
+    expect(parseCommentRoute('#/comment/abc123/extra')).toEqual({ id: 'abc123' });
+    expect(parseCommentRoute('#/comment/abc123?foo=bar')).toEqual({ id: 'abc123' });
+  });
+
+  it('returns null for non-comment hashes and empty ids', () => {
+    expect(parseCommentRoute('')).toBeNull();
+    expect(parseCommentRoute('#/')).toBeNull();
+    expect(parseCommentRoute('#/view?path=spec.md')).toBeNull();
+    expect(parseCommentRoute('#/comment/')).toBeNull();
   });
 });

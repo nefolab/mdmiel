@@ -81,9 +81,23 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
     return text.length > 80 ? text.slice(0, 80) : text;
   }
 
+  // FNV-1a, duplicated from web/src/lib/comments.ts snippetHash() byte-for-byte
+  // (same constants 0x811c9dc5 / 0x01000193, same >>> 0 + toString(16) + padStart(8, "0")
+  // rendering). Both sides must independently produce the same hash for the same
+  // (already-normalized) string; renderer/agent.test.ts extracts this function from the
+  // rendered script and asserts it against lib/comments.ts's snippetHash for shared inputs.
+  function fnv1aHash(str) {
+    var hash = 0x811c9dc5;
+    for (var i = 0; i < str.length; i++) {
+      hash ^= str.charCodeAt(i);
+      hash = Math.imul(hash, 0x01000193);
+    }
+    return (hash >>> 0).toString(16).padStart(8, "0");
+  }
+
   function rectOf(el) {
     var r = el.getBoundingClientRect();
-    return { x: r.x, y: r.y, width: r.width, height: r.height };
+    return { top: r.top, left: r.left, width: r.width, height: r.height };
   }
 
   var geometryRaf = null;
@@ -99,16 +113,105 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
     });
   }
 
-  window.addEventListener("scroll", function () { scheduleGeometry("scroll"); }, { passive: true });
-  window.addEventListener("resize", function () { scheduleGeometry("resize"); });
+  // --- DOMアンカー解決 (BridgeResolver) ----------------------------------
+  // 親から {type:"anchors", anchors:[{id, selector, snippet, snippetHash}]} を受けるたびに
+  // anchorsを差し替えてresolveAll()し、以後はresolvedMapに保持した要素参照から矩形だけを
+  // 再計算する (scroll/resizeでは再解決しない = 安価)。MutationObserverはSPA再描画で要素の
+  // アイデンティティが変わりうるため、発火のたびにresolveAll()からやり直す。
+  var anchors = [];
+  var resolvedMap = {};
+
+  function resolveOne(anchor) {
+    var el = null;
+    if (anchor.selector) {
+      try {
+        el = document.querySelector(anchor.selector);
+      } catch (e) {
+        el = null;
+      }
+    }
+    if (el && fnv1aHash(extractText(el)) === anchor.snippetHash) {
+      return el;
+    }
+    // セレクタ不一致/テキスト不一致: 全要素走査でテキストハッシュが一致する最初の要素を探す。
+    var all = document.querySelectorAll("*");
+    for (var i = 0; i < all.length; i++) {
+      if (fnv1aHash(extractText(all[i])) === anchor.snippetHash) {
+        return all[i];
+      }
+    }
+    return null;
+  }
+
+  function resolveAll() {
+    var nextMap = {};
+    for (var i = 0; i < anchors.length; i++) {
+      var a = anchors[i];
+      nextMap[a.id] = resolveOne(a);
+    }
+    resolvedMap = nextMap;
+  }
+
+  function isRectVisible(r) {
+    var vw = window.innerWidth || document.documentElement.clientWidth || 0;
+    var vh = window.innerHeight || document.documentElement.clientHeight || 0;
+    return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
+  }
+
+  function sendRectsNow() {
+    var rects = [];
+    for (var i = 0; i < anchors.length; i++) {
+      var a = anchors[i];
+      var el = resolvedMap[a.id];
+      if (!el || !document.contains(el)) {
+        rects.push({ id: a.id, found: false });
+        continue;
+      }
+      var r = el.getBoundingClientRect();
+      rects.push({
+        id: a.id,
+        found: true,
+        rect: { top: r.top, left: r.left, width: r.width, height: r.height },
+        visible: isRectVisible(r)
+      });
+    }
+    send({ type: "rects", rects: rects });
+  }
+
+  var rectsRaf = null;
+  function scheduleRects() {
+    if (rectsRaf !== null) return;
+    rectsRaf = window.requestAnimationFrame(function () {
+      rectsRaf = null;
+      sendRectsNow();
+    });
+  }
+
+  if (typeof MutationObserver === "function") {
+    var observer = new MutationObserver(function () {
+      resolveAll();
+      scheduleRects();
+    });
+    var observeRoot = document.documentElement || document.body;
+    if (observeRoot) {
+      observer.observe(observeRoot, { childList: true, subtree: true, attributes: true, characterData: true });
+    }
+  }
+  // -------------------------------------------------------------------------
+
+  window.addEventListener("scroll", function () { scheduleGeometry("scroll"); scheduleRects(); }, { passive: true });
+  window.addEventListener("resize", function () { scheduleGeometry("resize"); scheduleRects(); });
 
   document.addEventListener("click", function (e) {
     var el = e.target;
     if (!el || el.nodeType !== 1) return;
+    var text = extractText(el);
     send({
       type: "pick",
       selector: buildSelector(el),
-      text: extractText(el),
+      text: text,
+      snippet: text,
+      snippetHash: fnv1aHash(text),
       rect: rectOf(el)
     });
   }, true);
@@ -119,6 +222,20 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
     if (!data || typeof data !== "object" || data.nonce !== NONCE) return;
     if (data.type === "ping") {
       send({ type: "pong" });
+    } else if (data.type === "anchors" && data.anchors && typeof data.anchors.length === "number") {
+      anchors = data.anchors;
+      resolveAll();
+      scheduleRects();
+    } else if (data.type === "scrollTo" && typeof data.selector === "string") {
+      var target = null;
+      try {
+        target = document.querySelector(data.selector);
+      } catch (e) {
+        target = null;
+      }
+      if (target && target.scrollIntoView) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
     }
   });
 

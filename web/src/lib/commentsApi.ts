@@ -37,6 +37,12 @@ export async function listComments(path: string): Promise<Comment[]> {
   return data.comments;
 }
 
+/** GET /api/comments/{id} */
+export async function getComment(id: string): Promise<Comment> {
+  const res = await fetch(`/api/comments/${encodeURIComponent(id)}`);
+  return parseJsonOrThrow<Comment>(res);
+}
+
 /** POST /api/comments */
 export async function createComment(payload: CreateCommentPayload): Promise<Comment> {
   const res = await fetch('/api/comments', {

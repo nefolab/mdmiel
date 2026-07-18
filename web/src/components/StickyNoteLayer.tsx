@@ -18,6 +18,18 @@ const DRAG_THRESHOLD = 4;
 /** Estimated collapsed card height used for de-overlap stacking. */
 const NOTE_HEIGHT = 64;
 
+/**
+ * Per-comment measurement result for a 'live' pane, as reported by the BridgeResolver
+ * postMessage protocol (agent -> parent "rects" message, one entry per requested DOM
+ * anchor). SplitView owns the postMessage listener (it's the only thing with access to
+ * the iframe's contentWindow/nonce) and passes the latest snapshot down as `liveRects`.
+ */
+export interface LiveRect {
+  found: boolean;
+  rect?: { top: number; left: number; width: number; height: number };
+  visible: boolean;
+}
+
 export interface StickyNoteLayerProps {
   type: 'markdown' | 'html';
   content: string;
@@ -28,11 +40,16 @@ export interface StickyNoteLayerProps {
   iframeRef: React.RefObject<HTMLIFrameElement>;
   /**
    * 'live' panes render an allow-scripts-only iframe: contentDocument is unreachable from the
-   * parent (cross-origin), so direct DOM measurement is impossible. L0 skips measurement/render
-   * entirely for live html panes rather than crashing or mislabeling comments as orphaned; L1
-   * replaces this with BridgeResolver (postMessage-based measurement).
+   * parent (cross-origin), so direct DOM measurement is impossible. Measurement instead comes
+   * from `liveRects`, fed by SplitView's BridgeResolver postMessage bridge.
    */
   viewMode?: 'static' | 'live';
+  /** Latest BridgeResolver measurement per comment id. Only consulted when viewMode === 'live'. */
+  liveRects?: Record<string, LiveRect>;
+  /** Called with a user-facing status message after a card's "リンクをコピー" succeeds. */
+  onCopyLink?: (message: string) => void;
+  /** Comment id to briefly flash-highlight (e.g. after following a /#/comment/<id> link). */
+  flashCommentId?: string | null;
   onChanged: () => void;
 }
 
@@ -48,6 +65,9 @@ export function StickyNoteLayer({
   containerRef,
   iframeRef,
   viewMode = 'static',
+  liveRects,
+  onCopyLink,
+  flashCommentId,
   onChanged,
 }: StickyNoteLayerProps) {
   const allPlacements = useMemo(
@@ -80,11 +100,35 @@ export function StickyNoteLayer({
       }
     } else if (viewMode === 'live') {
       // sandbox="allow-scripts" のiframeはcontentDocumentが取得できない (cross-origin) ため、
-      // 測定をスキップする。missingIdsには入れない = orphaned扱いにしない。コメント自体は
-      // comments propに残ったまま、単にこのペインでは描画しない。
-      setPositions({});
-      setMissingIds([]);
-      return;
+      // 測定はSplitViewのpostMessageブリッジ (BridgeResolver) が送ってくるliveRectsに委ねる。
+      const iframe = iframeRef.current;
+      if (!iframe) {
+        setPositions({});
+        setMissingIds([]);
+        return;
+      }
+      const containerRect = container.getBoundingClientRect();
+      const iframeRect = iframe.getBoundingClientRect();
+      const iframeOffsetTop = iframeRect.top - containerRect.top;
+      for (const p of candidates) {
+        if (p.comment.anchor.type !== 'dom') {
+          // renderHtmlLive() はdata-source-line属性を注入しないため、旧来の行アンカー
+          // コメントはライブペインでは位置を特定できない (未解決ゾーンへ)。
+          raw.push({ id: p.comment.id, desiredTop: 0, present: false, visible: false });
+          continue;
+        }
+        const live = liveRects?.[p.comment.id];
+        if (!live || !live.found || !live.rect) {
+          raw.push({ id: p.comment.id, desiredTop: 0, present: false, visible: false });
+          continue;
+        }
+        raw.push({
+          id: p.comment.id,
+          desiredTop: iframeOffsetTop + live.rect.top,
+          present: true,
+          visible: live.visible,
+        });
+      }
     } else {
       const iframe = iframeRef.current;
       const doc = iframe?.contentDocument;
@@ -99,7 +143,13 @@ export function StickyNoteLayer({
       const viewportHeight = win.innerHeight || iframe.clientHeight;
       const iframeOffsetTop = iframeRect.top - containerRect.top;
       for (const p of candidates) {
-        const el = doc.querySelector(`[data-source-line="${p.line}"]`) as HTMLElement | null;
+        // DirectDomResolver: 静的ペイン (sandbox="allow-same-origin") ではcontentDocumentに
+        // 直接アクセスできるため、DOMアンカー ( ライブペインで作成後に静的へ切替えた場合等 ) も
+        // selectorでそのまま解決できる。行アンカーは従来通りdata-source-line属性で解決する。
+        const el =
+          p.comment.anchor.type === 'dom' && p.comment.anchor.selector
+            ? (doc.querySelector(p.comment.anchor.selector) as HTMLElement | null)
+            : (doc.querySelector(`[data-source-line="${p.line}"]`) as HTMLElement | null);
         if (!el) {
           raw.push({ id: p.comment.id, desiredTop: 0, present: false, visible: false });
           continue;
@@ -132,7 +182,7 @@ export function StickyNoteLayer({
     }
     setPositions(next);
     setMissingIds(raw.filter((r) => !r.present).map((r) => r.id));
-  }, [candidates, type, containerRef, iframeRef, viewMode]);
+  }, [candidates, type, containerRef, iframeRef, viewMode, liveRects]);
 
   useLayoutEffect(() => {
     // Initial synchronous measure so notes are positioned on first paint.
@@ -230,6 +280,8 @@ export function StickyNoteLayer({
             expanded={expandedId === p.comment.id}
             onToggle={() => toggleExpand(p.comment.id)}
             onChanged={onChanged}
+            onCopyLink={onCopyLink}
+            flashing={flashCommentId === p.comment.id}
           />
         );
       })}
@@ -250,6 +302,8 @@ export function StickyNoteLayer({
                 expanded={expandedId === p.comment.id}
                 onToggle={() => toggleExpand(p.comment.id)}
                 onChanged={onChanged}
+                onCopyLink={onCopyLink}
+                flashing={flashCommentId === p.comment.id}
               />
             ))}
           </div>
@@ -268,6 +322,10 @@ interface StickyNoteProps {
   expanded: boolean;
   onToggle: () => void;
   onChanged: () => void;
+  /** Called with a user-facing status message after a successful clipboard write. */
+  onCopyLink?: (message: string) => void;
+  /** Briefly applies a flash-highlight animation (e.g. after following a comment link). */
+  flashing?: boolean;
 }
 
 function excerpt(body: string, max = 48): string {
@@ -284,6 +342,8 @@ function StickyNote({
   expanded,
   onToggle,
   onChanged,
+  onCopyLink,
+  flashing,
 }: StickyNoteProps) {
   const actions = useCommentActions(onChanged);
   const [editing, setEditing] = useState(false);
@@ -386,6 +446,17 @@ function StickyNote({
     setEditing(false);
   };
 
+  // "リンクをコピー": /#/comment/<id> は静的/ライブ/markdown共通のアンカー再解決経路を持つため、
+  // モードを問わずこの1形式に一本化する ( 行リンクはmd側にのみ残す。html側の行リンクは廃止 )。
+  const handleCopyLink = (e: React.MouseEvent | React.PointerEvent) => {
+    e.stopPropagation();
+    const url = `${window.location.origin}${window.location.pathname}#/comment/${encodeURIComponent(comment.id)}`;
+    navigator.clipboard
+      .writeText(url)
+      .then(() => onCopyLink?.('付箋リンクをコピーしました'))
+      .catch((err) => console.error('Failed to copy', err));
+  };
+
   const className = [
     'sticky-note',
     floating ? 'sticky-note-floating' : '',
@@ -393,6 +464,7 @@ function StickyNote({
     orphaned ? 'sticky-note-orphaned' : '',
     expanded ? 'sticky-note-expanded' : '',
     isDragging ? 'sticky-note-dragging' : '',
+    flashing ? 'sticky-note-flash' : '',
   ]
     .filter(Boolean)
     .join(' ');
@@ -415,7 +487,28 @@ function StickyNote({
         <span className="sticky-note-author">{comment.author}</span>
         {orphaned && <span className="badge badge-orphaned">未解決</span>}
         {comment.resolved && <span className="sticky-note-badge-resolved">解決済み</span>}
-        <span className="sticky-note-line">L{line}</span>
+        <span className="sticky-note-line">{comment.anchor.type === 'dom' ? 'DOM' : `L${line}`}</span>
+        <button
+          className="sticky-note-btn-link"
+          onClick={handleCopyLink}
+          onPointerDown={(e) => e.stopPropagation()}
+          title="付箋リンクをコピー"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+          </svg>
+        </button>
       </div>
 
       {!expanded && <div className="sticky-note-excerpt">{excerpt(comment.body)}</div>}

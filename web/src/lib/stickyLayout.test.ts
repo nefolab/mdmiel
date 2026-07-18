@@ -45,6 +45,30 @@ describe('resolvePlacements', () => {
     expect(placements[0]).toEqual({ comment: commentOnBeta, line: 3, orphaned: false });
     expect(placements[1]).toEqual({ comment: commentGone, line: 2, orphaned: true });
   });
+
+  it('bypasses text-based rematching for DOM-anchored comments (never orphaned at this level)', () => {
+    const domComment: Comment = {
+      version: 1,
+      id: 'dom-1',
+      path: 'mock.html',
+      anchor: {
+        line: 0,
+        snippet: 'Submit',
+        snippetHash: snippetHash(computeSnippet('Submit')),
+        type: 'dom',
+        selector: '#submit-btn',
+      },
+      body: 'dom comment',
+      author: 'nefo',
+      createdAt: '2026-07-18T00:00:00Z',
+      resolved: false,
+    };
+    // Content has nothing resembling the DOM snippet anywhere; a text-based rematch
+    // would report orphaned:true, but DOM anchors must skip that pass entirely.
+    const content = ['<html>', '<body>completely unrelated text</body>', '</html>'].join('\n');
+    const placements = resolvePlacements([domComment], content);
+    expect(placements).toEqual([{ comment: domComment, line: 0, orphaned: false }]);
+  });
 });
 
 describe('splitOrphaned', () => {

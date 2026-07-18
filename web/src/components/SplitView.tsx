@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ViewState, generateHash } from '../lib/anchor';
-import { Comment, computeSnippet, snippetHash } from '../lib/comments';
+import { Comment, CommentAnchor, computeSnippet, snippetHash } from '../lib/comments';
 import { createComment } from '../lib/commentsApi';
-import { StickyNoteLayer } from './StickyNoteLayer';
+import { StickyNoteLayer, LiveRect } from './StickyNoteLayer';
+import { resolvePlacements } from '../lib/stickyLayout';
 import { renderMarkdown } from '../renderer/markdown';
 import { renderHtml, renderHtmlLive } from '../renderer/html';
 import { ViewMode, getViewMode, setViewMode as persistViewMode } from '../lib/viewMode';
@@ -28,6 +29,14 @@ export interface SplitViewProps {
   leftComments?: Comment[];
   rightComments?: Comment[];
   onCommentsChanged?: () => void;
+  /**
+   * Set by App when the URL was a "/#/comment/<id>" link: the id of the comment to
+   * scroll to and flash-highlight once its pane has finished loading. Cleared via
+   * onFocusHandled once the scroll+flash has actually been performed (or the target
+   * turns out not to belong to either open pane).
+   */
+  focusCommentId?: string;
+  onFocusHandled?: () => void;
 }
 
 interface MenuState {
@@ -35,6 +44,13 @@ interface MenuState {
   line: number;
   top: number;
   left: number;
+}
+
+/** anchor payload for a DOM-anchored draft, computed from the agent's "pick" message. */
+interface DomAnchorDraft {
+  selector: string;
+  snippet: string;
+  snippetHash: string;
 }
 
 interface CommentDraft {
@@ -46,6 +62,8 @@ interface CommentDraft {
   body: string;
   submitting: boolean;
   error: string | null;
+  /** Present for comments picked in a live pane; posted as anchor.type === 'dom'. */
+  domAnchor?: DomAnchorDraft;
 }
 
 interface ViewModeSwitcherProps {
@@ -83,6 +101,8 @@ export function SplitView({
   leftComments = [],
   rightComments = [],
   onCommentsChanged,
+  focusCommentId,
+  onFocusHandled,
 }: SplitViewProps) {
   const [leftData, setLeftData] = useState<PaneData | null>(null);
   const [rightData, setRightData] = useState<PaneData | null>(null);
@@ -93,6 +113,20 @@ export function SplitView({
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [leftViewMode, setLeftViewMode] = useState<ViewMode>('static');
   const [rightViewMode, setRightViewMode] = useState<ViewMode>('static');
+  // BridgeResolver measurement (agent -> parent "rects" message), keyed by comment id.
+  const [leftLiveRects, setLeftLiveRects] = useState<Record<string, LiveRect>>({});
+  const [rightLiveRects, setRightLiveRects] = useState<Record<string, LiveRect>>({});
+  // Flips true once the live pane's measurement agent has sent its "ready" message;
+  // gates sendAnchorsToAgent (no point posting anchors before the agent is listening).
+  const [leftAgentReady, setLeftAgentReady] = useState(false);
+  const [rightAgentReady, setRightAgentReady] = useState(false);
+  // "コメント追加" armed state: while true, the next "pick" message from that pane's
+  // agent opens the comment composer instead of being ignored. Auto-disarms after one pick.
+  const [leftArmed, setLeftArmed] = useState(false);
+  const [rightArmed, setRightArmed] = useState(false);
+  // Comment id to briefly flash-highlight on its sticky-note card (set once a
+  // /#/comment/<id> link has been resolved and its pane/anchor located).
+  const [flashCommentId, setFlashCommentId] = useState<string | null>(null);
 
   const splitViewRef = useRef<HTMLDivElement>(null);
   const leftPaneRef = useRef<HTMLDivElement>(null);
@@ -109,9 +143,12 @@ export function SplitView({
     Partial<Record<'left' | 'right', { doc: Document; handler: (e: MouseEvent) => void }>>
   >({});
   // Read by the single window 'message' listener (registered once, below) to validate
-  // incoming postMessage events against the live pane's current nonce without re-adding
-  // the listener every time a pane's mode/nonce changes.
-  const liveBridgeRef = useRef<Partial<Record<'left' | 'right', { nonce: string }>>>({});
+  // incoming postMessage events against the live pane's current nonce (and read the
+  // pane's current path/armed-for-pick state) without re-adding the listener every time
+  // a pane's mode/nonce/comments/armed-state changes.
+  const liveBridgeRef = useRef<Partial<Record<'left' | 'right', { nonce: string; path: string; armed: boolean }>>>(
+    {}
+  );
 
   const leftPath = viewState.path || viewState.left;
   const rightPath = viewState.right;
@@ -149,15 +186,41 @@ export function SplitView({
     }
   };
 
-  // Keep the bridge ref in sync with each pane's current live nonce so the message
-  // listener below (added once on mount) always validates against the latest value.
+  // Keep the bridge ref in sync with each pane's current live nonce/path/armed-state so
+  // the message listener below (added once on mount) always validates and reads against
+  // the latest values without needing to re-add itself.
   useEffect(() => {
-    liveBridgeRef.current.left = leftViewMode === 'live' && leftNonce ? { nonce: leftNonce } : undefined;
-  }, [leftViewMode, leftNonce]);
+    liveBridgeRef.current.left =
+      leftViewMode === 'live' && leftNonce && leftData
+        ? { nonce: leftNonce, path: leftData.path, armed: leftArmed }
+        : undefined;
+  }, [leftViewMode, leftNonce, leftData, leftArmed]);
 
   useEffect(() => {
-    liveBridgeRef.current.right = rightViewMode === 'live' && rightNonce ? { nonce: rightNonce } : undefined;
-  }, [rightViewMode, rightNonce]);
+    liveBridgeRef.current.right =
+      rightViewMode === 'live' && rightNonce && rightData
+        ? { nonce: rightNonce, path: rightData.path, armed: rightArmed }
+        : undefined;
+  }, [rightViewMode, rightNonce, rightData, rightArmed]);
+
+  // Resets stale bridge state whenever a fresh agent instance is about to mount (new nonce
+  // = new iframe key), so a leftover "ready"/rects/armed from a previous pane/agent never
+  // leaks into the new one.
+  useEffect(() => {
+    setLeftAgentReady(false);
+    setLeftLiveRects({});
+    setLeftArmed(false);
+  }, [leftNonce]);
+
+  useEffect(() => {
+    setRightAgentReady(false);
+    setRightLiveRects({});
+    setRightArmed(false);
+  }, [rightNonce]);
+
+  // Basic structural validation for numeric fields coming from the agent over postMessage
+  // (untrusted-ish: same nonce/source as us, but still worth bounding before use in layout math).
+  const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 
   // Single window-level listener for the whole SplitView lifetime: verifies
   // event.source === the pane's iframe.contentWindow and the nonce matches before trusting
@@ -173,12 +236,98 @@ export function SplitView({
         if (!iframe || event.source !== iframe.contentWindow) continue;
         const data = event.data;
         if (!data || typeof data !== 'object' || data.mdmiel !== true || data.nonce !== bridge.nonce) continue;
-        console.debug('[mdmiel-live]', pane, data);
+
+        if (data.type === 'ready') {
+          if (pane === 'left') setLeftAgentReady(true);
+          else setRightAgentReady(true);
+        } else if (data.type === 'rects' && Array.isArray(data.rects)) {
+          const map: Record<string, LiveRect> = {};
+          for (const entry of data.rects) {
+            if (!entry || typeof entry.id !== 'string') continue;
+            if (entry.found === true && entry.rect) {
+              const r = entry.rect;
+              if (!isFiniteNumber(r.top) || !isFiniteNumber(r.left) || !isFiniteNumber(r.width) || !isFiniteNumber(r.height)) {
+                continue;
+              }
+              map[entry.id] = {
+                found: true,
+                rect: { top: r.top, left: r.left, width: r.width, height: r.height },
+                visible: entry.visible === true,
+              };
+            } else {
+              map[entry.id] = { found: false, visible: false };
+            }
+          }
+          if (pane === 'left') setLeftLiveRects(map);
+          else setRightLiveRects(map);
+        } else if (data.type === 'pick' && bridge.armed) {
+          if (
+            typeof data.selector !== 'string' ||
+            typeof data.snippet !== 'string' ||
+            typeof data.snippetHash !== 'string' ||
+            !data.rect ||
+            !isFiniteNumber(data.rect.top) ||
+            !isFiniteNumber(data.rect.left)
+          ) {
+            continue;
+          }
+          const container = pane === 'left' ? leftContentRef.current : rightContentRef.current;
+          if (!container) continue;
+          const containerRect = container.getBoundingClientRect();
+          const iframeRect = iframe.getBoundingClientRect();
+          setCommentDraft({
+            pane,
+            path: bridge.path,
+            line: 0,
+            top: iframeRect.top - containerRect.top + data.rect.top,
+            left: iframeRect.left - containerRect.left + data.rect.left,
+            body: '',
+            submitting: false,
+            error: null,
+            domAnchor: { selector: data.selector, snippet: data.snippet, snippetHash: data.snippetHash },
+          });
+          if (pane === 'left') setLeftArmed(false);
+          else setRightArmed(false);
+        }
       }
     };
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
   }, []);
+
+  // Sends the pane's current DOM-anchored comments to its live agent for (re-)resolution.
+  // Called once the agent has signalled "ready" and again whenever the comment list changes
+  // (e.g. a new DOM comment was just created) while the pane stays in live mode.
+  const sendAnchorsToAgent = (pane: 'left' | 'right') => {
+    const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
+    const nonce = pane === 'left' ? leftNonce : rightNonce;
+    const comments = pane === 'left' ? leftComments : rightComments;
+    if (!iframe?.contentWindow || !nonce) return;
+    const anchors = comments
+      .filter((c) => c.anchor.type === 'dom' && !!c.anchor.selector)
+      .map((c) => ({
+        id: c.id,
+        selector: c.anchor.selector,
+        snippet: c.anchor.snippet,
+        snippetHash: c.anchor.snippetHash,
+      }));
+    iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'anchors', anchors }, '*');
+  };
+
+  useEffect(() => {
+    if (leftViewMode === 'live' && leftAgentReady) sendAnchorsToAgent('left');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftViewMode, leftAgentReady, leftComments, leftNonce]);
+
+  useEffect(() => {
+    if (rightViewMode === 'live' && rightAgentReady) sendAnchorsToAgent('right');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rightViewMode, rightAgentReady, rightComments, rightNonce]);
+
+  const handleToggleArmed = (pane: 'left' | 'right') => {
+    if (pane === 'left') setLeftArmed((v) => !v);
+    else setRightArmed((v) => !v);
+  };
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -251,10 +400,18 @@ export function SplitView({
     paneRef: React.RefObject<HTMLDivElement>,
     iframeRef: React.RefObject<HTMLIFrameElement>,
     type: 'markdown' | 'html',
-    line: number
+    line: number,
+    selectorOverride?: string
   ) => {
     const performScroll = (container: HTMLElement | Document) => {
-      const el = container.querySelector(`[data-source-line="${line}"]`) as HTMLElement;
+      // selectorOverride lets comment-link navigation (App -> #/comment/<id>) target a
+      // DOM-anchored comment's element directly, since it has no data-source-line to key on
+      // (used for the DirectDomResolver path: a DOM anchor being viewed in a static pane).
+      const el = (
+        selectorOverride
+          ? container.querySelector(selectorOverride)
+          : container.querySelector(`[data-source-line="${line}"]`)
+      ) as HTMLElement | null;
       if (el) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         el.classList.remove('source-line-highlight');
@@ -307,6 +464,76 @@ export function SplitView({
       return () => clearTimeout(timer);
     }
   }, [rightData, viewState.rightLine]);
+
+  // Comment-link navigation (App resolved "#/comment/<id>" -> getComment -> redirected here
+  // via "#/view?path=<comment.path>" + focusCommentId): once the target comment's pane and
+  // comments list have both loaded, scroll to its anchor and flash-highlight its sticky-note
+  // card. Static/markdown reuses the existing line-scroll mechanism (or, for a DOM-anchored
+  // comment being viewed in a static pane, DirectDomResolver's selector lookup); a live pane
+  // instead asks its agent to scroll via the "scrollTo" postMessage.
+  useEffect(() => {
+    if (!focusCommentId) return;
+
+    const leftHit = leftComments.find((c) => c.id === focusCommentId);
+    const rightHit = !leftHit ? rightComments.find((c) => c.id === focusCommentId) : undefined;
+    const pane: 'left' | 'right' | null = leftHit ? 'left' : rightHit ? 'right' : null;
+    if (!pane) return; // Comments haven't loaded for either pane yet; effect re-runs when they do.
+
+    const comment = (leftHit ?? rightHit)!;
+    const data = pane === 'left' ? leftData : rightData;
+    if (!data) return; // Pane content not loaded yet; effect re-runs once it is.
+
+    const mode = pane === 'left' ? leftViewMode : rightViewMode;
+    if (data.type === 'html' && mode === 'live' && comment.anchor.type === 'dom') {
+      const selector = comment.anchor.selector;
+      if (!selector) return;
+      const nonce = pane === 'left' ? leftNonce : rightNonce;
+      const ready = pane === 'left' ? leftAgentReady : rightAgentReady;
+      const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
+      if (!iframe?.contentWindow || !nonce || !ready) return; // Waits for the agent; effect re-runs on ready.
+      iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'scrollTo', selector }, '*');
+      setFlashCommentId(focusCommentId);
+      onFocusHandled?.();
+      return;
+    }
+
+    const { line } = resolvePlacements([comment], data.content)[0];
+    const paneRef = pane === 'left' ? leftPaneRef : rightPaneRef;
+    const targetIframeRef = pane === 'left' ? leftIframeRef : rightIframeRef;
+    const selectorOverride = comment.anchor.type === 'dom' ? comment.anchor.selector : undefined;
+    const scrollTimer = window.setTimeout(() => {
+      scrollToLine(paneRef, targetIframeRef, data.type, line, selectorOverride);
+    }, 150);
+    setFlashCommentId(focusCommentId);
+    onFocusHandled?.();
+    return () => window.clearTimeout(scrollTimer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    focusCommentId,
+    leftComments,
+    rightComments,
+    leftData,
+    rightData,
+    leftViewMode,
+    rightViewMode,
+    leftAgentReady,
+    rightAgentReady,
+    leftNonce,
+    rightNonce,
+  ]);
+
+  // Auto-dismisses the flash-highlight exactly 3s after it was last set, independent of the
+  // focus-navigation effect above: that effect has several volatile dependencies (comments
+  // lists, agent-ready flags, ...) that can legitimately re-run within the 3s window for
+  // reasons unrelated to the flash itself, and tying the clear-timer to *that* effect's
+  // cleanup would cancel it on every such re-run, leaving the flash stuck on indefinitely.
+  useEffect(() => {
+    if (!flashCommentId) return;
+    const timer = window.setTimeout(() => {
+      setFlashCommentId((cur) => (cur === flashCommentId ? null : cur));
+    }, 3000);
+    return () => window.clearTimeout(timer);
+  }, [flashCommentId]);
 
   const handleMarkdownContextMenu = (e: React.MouseEvent<HTMLDivElement>, pane: 'left' | 'right') => {
     const target = e.target as HTMLElement;
@@ -488,18 +715,30 @@ export function SplitView({
     setCommentDraft((prev) => (prev ? { ...prev, submitting: true, error: null } : prev));
 
     try {
-      const lineText = getLineText(commentDraft.pane, commentDraft.line);
-      const snippet = computeSnippet(lineText);
-      const hash = snippetHash(snippet);
+      let anchor: CommentAnchor;
+      if (commentDraft.domAnchor) {
+        anchor = {
+          line: 0,
+          snippet: commentDraft.domAnchor.snippet,
+          snippetHash: commentDraft.domAnchor.snippetHash,
+          type: 'dom',
+          selector: commentDraft.domAnchor.selector,
+        };
+      } else {
+        const snippet = computeSnippet(getLineText(commentDraft.pane, commentDraft.line));
+        anchor = { line: commentDraft.line, snippet, snippetHash: snippetHash(snippet) };
+      }
 
       await createComment({
         path: commentDraft.path,
-        anchor: { line: commentDraft.line, snippet, snippetHash: hash },
+        anchor,
         body: commentDraft.body,
       });
 
       setCommentDraft(null);
-      showToast(`コメントを追加しました ( 行: ${commentDraft.line} )`);
+      showToast(
+        commentDraft.domAnchor ? 'コメントを追加しました ( DOM要素 )' : `コメントを追加しました ( 行: ${commentDraft.line} )`
+      );
       onCommentAdded?.();
     } catch (err) {
       setCommentDraft((prev) =>
@@ -516,6 +755,11 @@ export function SplitView({
     );
   }
 
+  // 行リンクはmd側のみ維持し、html側は付箋リンク ( /#/comment/<id> ) に一本化する
+  // ( working/idea-live-prototype-review.md の決定事項 )。行コメントの追加自体はhtml静的
+  // ペインでも引き続き可能なので、gutter-comment-btnはpane種別を問わず表示する。
+  const menuPaneType = menuState ? (menuState.pane === 'left' ? leftData?.type : rightData?.type) : undefined;
+
   return (
     <div className="split-view-container" ref={splitViewRef}>
       {/* Toast */}
@@ -527,26 +771,28 @@ export function SplitView({
           className="gutter-actions"
           style={{ top: `${menuState.top}px`, left: `${Math.max(menuState.left, 0)}px` }}
         >
-          <button
-            className="gutter-link-btn"
-            onClick={handleCopyLink}
-            title={`行リンクをコピー ( 行: ${menuState.line} )`}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          {menuPaneType === 'markdown' && (
+            <button
+              className="gutter-link-btn"
+              onClick={handleCopyLink}
+              title={`行リンクをコピー ( 行: ${menuState.line} )`}
             >
-              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-            </svg>
-          </button>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+              </svg>
+            </button>
+          )}
           <button
             className="gutter-comment-btn"
             onClick={handleOpenCommentForm}
@@ -576,7 +822,7 @@ export function SplitView({
           style={{ top: `${commentDraft.top}px`, left: `${Math.max(commentDraft.left, 0)}px` }}
         >
           <div className="comment-popover-header">
-            <span>コメントを追加 ( 行: {commentDraft.line} )</span>
+            <span>{commentDraft.domAnchor ? 'コメントを追加 ( DOM要素 )' : `コメントを追加 ( 行: ${commentDraft.line} )`}</span>
             <button className="comment-popover-close" onClick={handleCancelComment} title="閉じる">
               ✕
             </button>
@@ -615,6 +861,15 @@ export function SplitView({
           <div className="pane-actions">
             {leftData?.type === 'html' && (
               <ViewModeSwitcher mode={leftViewMode} onChange={(mode) => handleSetViewMode('left', mode)} />
+            )}
+            {leftData?.type === 'html' && leftViewMode === 'live' && (
+              <button
+                className={`pane-add-comment-btn ${leftArmed ? 'active' : ''}`}
+                onClick={() => handleToggleArmed('left')}
+                title={leftArmed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
+              >
+                {leftArmed ? 'クリックして配置...' : 'コメント追加'}
+              </button>
             )}
             {rightPath && (
               <button className="close-btn" onClick={() => onClosePane('left')} title="左ペインを閉じる">
@@ -659,6 +914,9 @@ export function SplitView({
               containerRef={leftContentRef}
               iframeRef={leftIframeRef}
               viewMode={leftData.type === 'html' ? leftViewMode : 'static'}
+              liveRects={leftLiveRects}
+              onCopyLink={showToast}
+              flashCommentId={flashCommentId}
               onChanged={() => onCommentsChanged?.()}
             />
           )}
@@ -676,6 +934,15 @@ export function SplitView({
             <div className="pane-actions">
               {rightData?.type === 'html' && (
                 <ViewModeSwitcher mode={rightViewMode} onChange={(mode) => handleSetViewMode('right', mode)} />
+              )}
+              {rightData?.type === 'html' && rightViewMode === 'live' && (
+                <button
+                  className={`pane-add-comment-btn ${rightArmed ? 'active' : ''}`}
+                  onClick={() => handleToggleArmed('right')}
+                  title={rightArmed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
+                >
+                  {rightArmed ? 'クリックして配置...' : 'コメント追加'}
+                </button>
               )}
               <button className="close-btn" onClick={() => onClosePane('right')} title="右ペインを閉じる">
                 ✕
@@ -718,6 +985,9 @@ export function SplitView({
                 containerRef={rightContentRef}
                 iframeRef={rightIframeRef}
                 viewMode={rightData.type === 'html' ? rightViewMode : 'static'}
+                liveRects={rightLiveRects}
+                onCopyLink={showToast}
+                flashCommentId={flashCommentId}
                 onChanged={() => onCommentsChanged?.()}
               />
             )}

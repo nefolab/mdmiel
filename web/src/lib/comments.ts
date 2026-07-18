@@ -10,6 +10,13 @@ export interface CommentAnchor {
   line: number;
   snippet: string;
   snippetHash: string;
+  /**
+   * "dom" のとき、このアンカーはライブプロトタイプレビュー ( BridgeResolver ) 向けの
+   * DOM要素アンカーであることを示す。省略時は従来通りの行アンカーを表す。
+   */
+  type?: 'dom';
+  /** type: 'dom' のとき、DOM要素の安定セレクタ ( id/data-testid優先、無ければタグ+nth-of-typeのパス )。 */
+  selector?: string;
 }
 
 export interface Comment {

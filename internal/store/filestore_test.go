@@ -352,6 +352,84 @@ func TestFileStoreListDeterministicOrder(t *testing.T) {
 	}
 }
 
+// TestFileStoreDOMAnchorRoundTrip はtype/selector入りのAnchorを持つコメントを
+// Createしたあと、Getで取得した結果に両フィールドが保持されていることを確認する
+// ( ライブプロトタイプレビューのDOMアンカー、working/idea-live-prototype-review.md 参照 )。
+func TestFileStoreDOMAnchorRoundTrip(t *testing.T) {
+	rootDir := t.TempDir()
+	fs := NewFileStore(rootDir)
+
+	c := Comment{
+		Path: "mock.html",
+		Anchor: Anchor{
+			Snippet:     "Submit",
+			SnippetHash: "deadbeef",
+			Type:        "dom",
+			Selector:    `[data-testid="submit-button"]`,
+		},
+		Body: "dom anchored comment",
+	}
+
+	created, err := fs.Create(c)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if created.Anchor.Type != "dom" {
+		t.Errorf("expected anchor.type=dom, got %q", created.Anchor.Type)
+	}
+	if created.Anchor.Selector != `[data-testid="submit-button"]` {
+		t.Errorf("unexpected anchor.selector: %q", created.Anchor.Selector)
+	}
+
+	got, err := fs.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got.Anchor.Type != "dom" {
+		t.Errorf("expected anchor.type=dom after reload, got %q", got.Anchor.Type)
+	}
+	if got.Anchor.Selector != `[data-testid="submit-button"]` {
+		t.Errorf("unexpected anchor.selector after reload: %q", got.Anchor.Selector)
+	}
+	if got.Anchor.Snippet != "Submit" || got.Anchor.SnippetHash != "deadbeef" {
+		t.Errorf("unexpected snippet/snippetHash after reload: %+v", got.Anchor)
+	}
+}
+
+// TestFileStoreLineAnchorOmitsDOMFields は従来の行アンカー ( type未指定 ) で保存すると、
+// 永続化されたJSONにtype/selectorキーが現れないこと ( omitempty ) を確認する。
+// json,omitempty漏れによるサイドカーファイルの形式変化 ( 既存コメントとの互換性崩れ ) を防ぐ。
+func TestFileStoreLineAnchorOmitsDOMFields(t *testing.T) {
+	rootDir := t.TempDir()
+	fs := NewFileStore(rootDir)
+
+	created, err := fs.Create(Comment{
+		Path: "spec.md",
+		Anchor: Anchor{
+			Line:        10,
+			Snippet:     "hello world",
+			SnippetHash: "abc123",
+		},
+		Body: "line anchored comment",
+	})
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(rootDir, ".mdmiel", "comments", created.ID+".json"))
+	if err != nil {
+		t.Fatalf("failed to read persisted comment file: %v", err)
+	}
+
+	raw := string(data)
+	if strings.Contains(raw, `"type"`) {
+		t.Errorf("expected no type key for line anchor, got: %s", raw)
+	}
+	if strings.Contains(raw, `"selector"`) {
+		t.Errorf("expected no selector key for line anchor, got: %s", raw)
+	}
+}
+
 func TestFileStoreGetNotFound(t *testing.T) {
 	rootDir := t.TempDir()
 	fs := NewFileStore(rootDir)

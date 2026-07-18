@@ -91,3 +91,37 @@ export function generateHash(state: ViewState): string {
   const queryString = params.toString().replace(/\+/g, '%20');
   return queryString ? `#/view?${queryString}` : '#/';
 }
+
+export interface CommentRoute {
+  id: string;
+}
+
+/**
+ * Parses a "#/comment/<id>" style hash produced by the sticky-note card's
+ * "リンクをコピー" button. Returns null for any hash that isn't this route
+ * (including the "#/view..." route handled by parseHash above).
+ *
+ * The id segment is URL-decoded and truncated at the first '/' or '?' so
+ * trailing path noise can't leak into the id passed to getComment().
+ */
+export function parseCommentRoute(hash: string): CommentRoute | null {
+  const prefix = '#/comment/';
+  if (!hash || !hash.startsWith(prefix)) {
+    return null;
+  }
+  const rest = hash.slice(prefix.length);
+  const idPart = rest.split(/[/?]/, 1)[0];
+  if (!idPart) {
+    return null;
+  }
+  let id: string;
+  try {
+    id = decodeURIComponent(idPart);
+  } catch {
+    return null;
+  }
+  if (!id) {
+    return null;
+  }
+  return { id };
+}

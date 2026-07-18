@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { SplitView, PaneContentInfo } from './components/SplitView';
 import { CommentSidebar, CommentSidebarPaneInfo } from './components/CommentSidebar';
-import { parseHash, generateHash, ViewState } from './lib/anchor';
+import { parseHash, generateHash, parseCommentRoute, ViewState } from './lib/anchor';
 import { Comment } from './lib/comments';
-import { listComments } from './lib/commentsApi';
+import { listComments, getComment } from './lib/commentsApi';
 import { Theme, getInitialTheme, applyTheme } from './lib/theme';
 
 export default function App() {
@@ -20,16 +20,41 @@ export default function App() {
     left: [],
     right: [],
   });
+  // Set when the current URL was a "/#/comment/<id>" link, once getComment(id) has resolved
+  // and the hash has been redirected to "#/view?path=<comment.path>". Consumed by SplitView
+  // to scroll to + flash-highlight the target comment's sticky-note card once its pane loads;
+  // SplitView clears it back via onFocusHandled.
+  const [focusCommentId, setFocusCommentId] = useState<string | null>(null);
 
   const leftPath = viewState.path || viewState.left;
   const rightPath = viewState.right;
 
+  // Handles both the regular "#/view?..." route and the "#/comment/<id>" sticky-note-link
+  // route. The latter isn't a real view state by itself: it resolves the comment via the API,
+  // then rewrites the hash to "#/view?path=<comment.path>" (which re-enters this same handler
+  // and falls through to the normal parseHash path) while remembering the target comment id
+  // for SplitView's scroll+flash. Unknown ids are logged and otherwise left on the "select a
+  // file" fallback screen (no toast mechanism exists at this level).
   useEffect(() => {
-    const handleHashChange = () => {
-      setViewState(parseHash(window.location.hash));
+    const processHash = () => {
+      const hash = window.location.hash;
+      const route = parseCommentRoute(hash);
+      if (route) {
+        getComment(route.id)
+          .then((comment) => {
+            setFocusCommentId(comment.id);
+            window.location.hash = generateHash({ path: comment.path });
+          })
+          .catch((err) => {
+            console.error('コメントの取得に失敗しました:', err);
+          });
+        return;
+      }
+      setViewState(parseHash(hash));
     };
-    window.addEventListener('hashchange', handleHashChange);
-    return () => window.removeEventListener('hashchange', handleHashChange);
+    processHash();
+    window.addEventListener('hashchange', processHash);
+    return () => window.removeEventListener('hashchange', processHash);
   }, []);
 
   // 起動時・切替時にdata-theme属性とlocalStorageへ反映する。
@@ -203,6 +228,8 @@ export default function App() {
           leftComments={commentsByPane.left}
           rightComments={commentsByPane.right}
           onCommentsChanged={reloadComments}
+          focusCommentId={focusCommentId ?? undefined}
+          onFocusHandled={() => setFocusCommentId(null)}
         />
         {commentsPanelOpen && leftPath && (
           <CommentSidebar

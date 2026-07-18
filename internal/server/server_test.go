@@ -22,13 +22,13 @@ func TestServer(t *testing.T) {
 
 	// テスト用のファイル配置
 	filesToCreate := map[string]string{
-		"spec.md":                 "# Specification",
-		"mock.html":               "<html></html>",
-		"style.css":               "body {}",
+		"spec.md":                   "# Specification",
+		"mock.html":                 "<html></html>",
+		"style.css":                 "body {}",
 		".mdmiel/comments/123.json": `{"id":"123"}`,
-		"node_modules/dep/a.md":   "# Dependency",
-		".git/config":             "git config",
-		"sub/doc.md":              "# Sub Doc",
+		"node_modules/dep/a.md":     "# Dependency",
+		".git/config":               "git config",
+		"sub/doc.md":                "# Sub Doc",
 	}
 
 	for rel, content := range filesToCreate {
@@ -412,6 +412,63 @@ func TestCommentsAPI(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("expected 404, got %d", rec.Code)
+		}
+	})
+}
+
+// TestCommentGetByID は GET /api/comments/{id} の200 ( 作成→取得一致 ) / 404 ( 未知ID ) /
+// 不正ID形式 ( 既存のPATCH/DELETEハンドラの慣例に合わせ400 ) を確認する。
+func TestCommentGetByID(t *testing.T) {
+	handler, _ := newCommentsTestServer(t)
+
+	createBody := `{"path":"spec.md","anchor":{"line":1,"snippet":"# Spec","snippetHash":"h1"},"body":"gettable comment"}`
+	req := httptest.NewRequest("POST", "/api/comments", strings.NewReader(createBody))
+	req.Host = "127.0.0.1:8686"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created store.Comment
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode created comment: %v", err)
+	}
+
+	t.Run("GET existing id returns 200 and matches created comment", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments/"+created.ID, nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var got store.Comment
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if got.ID != created.ID || got.Body != created.Body || got.Path != created.Path {
+			t.Errorf("expected comment to match created one, got %+v", got)
+		}
+	})
+
+	t.Run("GET unknown id returns 404", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments/00000000-0000-4000-8000-000000000000", nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", rec.Code)
+		}
+	})
+
+	t.Run("GET malformed id returns 400 (matches PATCH/DELETE convention)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments/a/b", nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
 		}
 	})
 }

@@ -4,9 +4,9 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
-	"mdmiel/internal/store"
 	"io/fs"
 	"math"
+	"mdmiel/internal/store"
 	"net"
 	"net/http"
 	"net/url"
@@ -129,6 +129,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/file", s.handleFile)
 	mux.HandleFunc("GET /api/comments", s.handleCommentsList)
 	mux.HandleFunc("POST /api/comments", s.handleCommentsCreate)
+	mux.HandleFunc("GET /api/comments/{id...}", s.handleCommentGet)
 	mux.HandleFunc("PATCH /api/comments/{id...}", s.handleCommentUpdate)
 	mux.HandleFunc("DELETE /api/comments/{id...}", s.handleCommentDelete)
 	mux.HandleFunc("GET /raw/", s.handleRaw)
@@ -469,6 +470,29 @@ func (s *Server) handleCommentsCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(created)
+}
+
+// handleCommentGet は GET /api/comments/{id} を処理する。
+// 付箋リンク ( /#/comment/<id> ) からコメント単体を取得するために使う。
+func (s *Server) handleCommentGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !isValidCommentID(id) {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	c, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(c)
 }
 
 // handleCommentUpdate は PATCH /api/comments/{id} を処理する。

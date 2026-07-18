@@ -17,6 +17,14 @@ export interface ResolvedPlacement {
 /**
  * Runs each comment through rematchLine against the current file content to
  * find its display line and whether it has become orphaned.
+ *
+ * DOM-anchored comments (anchor.type === 'dom') bypass rematchLine entirely: their
+ * snippet/snippetHash describe a live DOM element's text, not a raw-source line, so
+ * comparing them against lines of `content` would be a category error (and could
+ * spuriously "rematch" to an unrelated line that happens to hash the same). For these,
+ * `orphaned` is always false here — whether the anchor actually resolves to a DOM
+ * element is determined later by BridgeResolver/DirectDomResolver (surfaced as the
+ * "missing" bucket in splitOrphaned), not by this text-level pass.
  */
 export function resolvePlacements(
   comments: Comment[],
@@ -24,6 +32,9 @@ export function resolvePlacements(
   radius?: number
 ): ResolvedPlacement[] {
   return comments.map((comment) => {
+    if (comment.anchor.type === 'dom') {
+      return { comment, line: comment.anchor.line, orphaned: false };
+    }
     const { line, orphaned } = rematchLine({
       content,
       anchorLine: comment.anchor.line,
