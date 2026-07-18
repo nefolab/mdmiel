@@ -323,7 +323,37 @@ body {
 
 .pane-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+/* 静的/ライブ切替トグル ( theme-switcherと同系のUI ) */
+.view-mode-switcher-track {
+  display: flex;
+  gap: 2px;
+  background-color: var(--color-chip-bg);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.view-mode-switcher-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-muted);
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.view-mode-switcher-btn:hover {
+  color: var(--color-text);
+}
+
+.view-mode-switcher-btn.active {
+  background-color: var(--color-accent);
+  color: var(--color-panel);
 }
 
 .pane-content {

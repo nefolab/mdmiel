@@ -1,10 +1,11 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { ViewState, generateHash } from '../lib/anchor';
 import { Comment, computeSnippet, snippetHash } from '../lib/comments';
 import { createComment } from '../lib/commentsApi';
 import { StickyNoteLayer } from './StickyNoteLayer';
 import { renderMarkdown } from '../renderer/markdown';
-import { renderHtml } from '../renderer/html';
+import { renderHtml, renderHtmlLive } from '../renderer/html';
+import { ViewMode, getViewMode, setViewMode as persistViewMode } from '../lib/viewMode';
 
 interface PaneData {
   path: string;
@@ -47,6 +48,33 @@ interface CommentDraft {
   error: string | null;
 }
 
+interface ViewModeSwitcherProps {
+  mode: ViewMode;
+  onChange: (mode: ViewMode) => void;
+}
+
+/** 静的/ライブの切替トグル。ヘッダーのtheme-switcherと同系のUI ( CSS変数のみ使用 )。 */
+function ViewModeSwitcher({ mode, onChange }: ViewModeSwitcherProps) {
+  return (
+    <div className="view-mode-switcher-track">
+      <button
+        className={`view-mode-switcher-btn ${mode === 'static' ? 'active' : ''}`}
+        onClick={() => onChange('static')}
+        title="静的モードに切替 ( スクリプト無効・安全側 )"
+      >
+        静的
+      </button>
+      <button
+        className={`view-mode-switcher-btn ${mode === 'live' ? 'active' : ''}`}
+        onClick={() => onChange('live')}
+        title="ライブモードに切替 ( JS駆動プロトタイプをそのまま実行 )"
+      >
+        ライブ
+      </button>
+    </div>
+  );
+}
+
 export function SplitView({
   viewState,
   onClosePane,
@@ -63,6 +91,8 @@ export function SplitView({
   const [menuState, setMenuState] = useState<MenuState | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
+  const [leftViewMode, setLeftViewMode] = useState<ViewMode>('static');
+  const [rightViewMode, setRightViewMode] = useState<ViewMode>('static');
 
   const splitViewRef = useRef<HTMLDivElement>(null);
   const leftPaneRef = useRef<HTMLDivElement>(null);
@@ -78,9 +108,77 @@ export function SplitView({
   const iframeContextMenuRef = useRef<
     Partial<Record<'left' | 'right', { doc: Document; handler: (e: MouseEvent) => void }>>
   >({});
+  // Read by the single window 'message' listener (registered once, below) to validate
+  // incoming postMessage events against the live pane's current nonce without re-adding
+  // the listener every time a pane's mode/nonce changes.
+  const liveBridgeRef = useRef<Partial<Record<'left' | 'right', { nonce: string }>>>({});
 
   const leftPath = viewState.path || viewState.left;
   const rightPath = viewState.right;
+
+  // Per-pane handshake token for the live-mode measurement agent. Regenerated whenever the
+  // pane switches to a new path or (re-)enters live mode, so each fresh agent instance gets
+  // its own nonce; the iframe is remounted (key change) in lockstep via viewMode+nonce below.
+  const leftNonce = useMemo(
+    () => (leftViewMode === 'live' && leftPath ? crypto.randomUUID() : ''),
+    [leftViewMode, leftPath]
+  );
+  const rightNonce = useMemo(
+    () => (rightViewMode === 'live' && rightPath ? crypto.randomUUID() : ''),
+    [rightViewMode, rightPath]
+  );
+
+  // Load each pane's persisted view mode when its path changes (new file = re-check
+  // localStorage; a path with no saved preference falls back to 'static').
+  useEffect(() => {
+    setLeftViewMode(leftPath ? getViewMode(leftPath) : 'static');
+  }, [leftPath]);
+
+  useEffect(() => {
+    setRightViewMode(rightPath ? getViewMode(rightPath) : 'static');
+  }, [rightPath]);
+
+  const handleSetViewMode = (pane: 'left' | 'right', mode: ViewMode) => {
+    const path = pane === 'left' ? leftPath : rightPath;
+    if (!path) return;
+    persistViewMode(path, mode);
+    if (pane === 'left') {
+      setLeftViewMode(mode);
+    } else {
+      setRightViewMode(mode);
+    }
+  };
+
+  // Keep the bridge ref in sync with each pane's current live nonce so the message
+  // listener below (added once on mount) always validates against the latest value.
+  useEffect(() => {
+    liveBridgeRef.current.left = leftViewMode === 'live' && leftNonce ? { nonce: leftNonce } : undefined;
+  }, [leftViewMode, leftNonce]);
+
+  useEffect(() => {
+    liveBridgeRef.current.right = rightViewMode === 'live' && rightNonce ? { nonce: rightNonce } : undefined;
+  }, [rightViewMode, rightNonce]);
+
+  // Single window-level listener for the whole SplitView lifetime: verifies
+  // event.source === the pane's iframe.contentWindow and the nonce matches before trusting
+  // the message. Non-matching messages (wrong source, wrong/missing nonce, foreign origin
+  // payload shape) are silently ignored rather than acted on.
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      const panes: Array<'left' | 'right'> = ['left', 'right'];
+      for (const pane of panes) {
+        const bridge = liveBridgeRef.current[pane];
+        if (!bridge) continue;
+        const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
+        if (!iframe || event.source !== iframe.contentWindow) continue;
+        const data = event.data;
+        if (!data || typeof data !== 'object' || data.mdmiel !== true || data.nonce !== bridge.nonce) continue;
+        console.debug('[mdmiel-live]', pane, data);
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, []);
 
   const showToast = (message: string) => {
     setToastMessage(message);
@@ -514,11 +612,16 @@ export function SplitView({
             <span>{leftData?.type === 'markdown' ? '📝' : '🌐'}</span>
             <span>{leftPath}</span>
           </div>
-          {rightPath && (
-            <button className="close-btn" onClick={() => onClosePane('left')} title="左ペインを閉じる">
-              ✕
-            </button>
-          )}
+          <div className="pane-actions">
+            {leftData?.type === 'html' && (
+              <ViewModeSwitcher mode={leftViewMode} onChange={(mode) => handleSetViewMode('left', mode)} />
+            )}
+            {rightPath && (
+              <button className="close-btn" onClick={() => onClosePane('left')} title="左ペインを閉じる">
+                ✕
+              </button>
+            )}
+          </div>
         </div>
         <div
           ref={leftContentRef}
@@ -529,13 +632,23 @@ export function SplitView({
           {!leftError && leftData?.type === 'markdown' && (
             <div className="markdown-body" dangerouslySetInnerHTML={{ __html: leftData.renderedHtml }} />
           )}
-          {!leftError && leftData?.type === 'html' && (
+          {!leftError && leftData?.type === 'html' && leftViewMode === 'static' && (
             <iframe
+              key={`static-${leftData.path}`}
               ref={leftIframeRef}
               className="preview-iframe"
               sandbox="allow-same-origin"
               srcDoc={leftData.renderedHtml}
               onLoad={() => handleIframeLoad('left', leftIframeRef)}
+            />
+          )}
+          {!leftError && leftData?.type === 'html' && leftViewMode === 'live' && leftNonce && (
+            <iframe
+              key={`live-${leftData.path}-${leftNonce}`}
+              ref={leftIframeRef}
+              className="preview-iframe"
+              sandbox="allow-scripts"
+              srcDoc={renderHtmlLive(leftData.content, leftData.path, leftNonce)}
             />
           )}
           {!leftError && leftData && (
@@ -545,6 +658,7 @@ export function SplitView({
               comments={leftComments}
               containerRef={leftContentRef}
               iframeRef={leftIframeRef}
+              viewMode={leftData.type === 'html' ? leftViewMode : 'static'}
               onChanged={() => onCommentsChanged?.()}
             />
           )}
@@ -559,9 +673,14 @@ export function SplitView({
               <span>{rightData?.type === 'markdown' ? '📝' : '🌐'}</span>
               <span>{rightPath}</span>
             </div>
-            <button className="close-btn" onClick={() => onClosePane('right')} title="右ペインを閉じる">
-              ✕
-            </button>
+            <div className="pane-actions">
+              {rightData?.type === 'html' && (
+                <ViewModeSwitcher mode={rightViewMode} onChange={(mode) => handleSetViewMode('right', mode)} />
+              )}
+              <button className="close-btn" onClick={() => onClosePane('right')} title="右ペインを閉じる">
+                ✕
+              </button>
+            </div>
           </div>
           <div
             ref={rightContentRef}
@@ -572,13 +691,23 @@ export function SplitView({
             {!rightError && rightData?.type === 'markdown' && (
               <div className="markdown-body" dangerouslySetInnerHTML={{ __html: rightData.renderedHtml }} />
             )}
-            {!rightError && rightData?.type === 'html' && (
+            {!rightError && rightData?.type === 'html' && rightViewMode === 'static' && (
               <iframe
+                key={`static-${rightData.path}`}
                 ref={rightIframeRef}
                 className="preview-iframe"
                 sandbox="allow-same-origin"
                 srcDoc={rightData.renderedHtml}
                 onLoad={() => handleIframeLoad('right', rightIframeRef)}
+              />
+            )}
+            {!rightError && rightData?.type === 'html' && rightViewMode === 'live' && rightNonce && (
+              <iframe
+                key={`live-${rightData.path}-${rightNonce}`}
+                ref={rightIframeRef}
+                className="preview-iframe"
+                sandbox="allow-scripts"
+                srcDoc={renderHtmlLive(rightData.content, rightData.path, rightNonce)}
               />
             )}
             {!rightError && rightData && (
@@ -588,6 +717,7 @@ export function SplitView({
                 comments={rightComments}
                 containerRef={rightContentRef}
                 iframeRef={rightIframeRef}
+                viewMode={rightData.type === 'html' ? rightViewMode : 'static'}
                 onChanged={() => onCommentsChanged?.()}
               />
             )}

@@ -26,6 +26,13 @@ export interface StickyNoteLayerProps {
   containerRef: React.RefObject<HTMLDivElement>;
   /** The sandboxed iframe for html panes (unused for markdown). */
   iframeRef: React.RefObject<HTMLIFrameElement>;
+  /**
+   * 'live' panes render an allow-scripts-only iframe: contentDocument is unreachable from the
+   * parent (cross-origin), so direct DOM measurement is impossible. L0 skips measurement/render
+   * entirely for live html panes rather than crashing or mislabeling comments as orphaned; L1
+   * replaces this with BridgeResolver (postMessage-based measurement).
+   */
+  viewMode?: 'static' | 'live';
   onChanged: () => void;
 }
 
@@ -40,6 +47,7 @@ export function StickyNoteLayer({
   comments,
   containerRef,
   iframeRef,
+  viewMode = 'static',
   onChanged,
 }: StickyNoteLayerProps) {
   const allPlacements = useMemo(
@@ -70,6 +78,13 @@ export function StickyNoteLayer({
         const el = container.querySelector(`[data-source-line="${p.line}"]`) as HTMLElement | null;
         raw.push({ id: p.comment.id, desiredTop: el ? el.offsetTop : 0, present: !!el, visible: !!el });
       }
+    } else if (viewMode === 'live') {
+      // sandbox="allow-scripts" のiframeはcontentDocumentが取得できない (cross-origin) ため、
+      // 測定をスキップする。missingIdsには入れない = orphaned扱いにしない。コメント自体は
+      // comments propに残ったまま、単にこのペインでは描画しない。
+      setPositions({});
+      setMissingIds([]);
+      return;
     } else {
       const iframe = iframeRef.current;
       const doc = iframe?.contentDocument;
@@ -117,7 +132,7 @@ export function StickyNoteLayer({
     }
     setPositions(next);
     setMissingIds(raw.filter((r) => !r.present).map((r) => r.id));
-  }, [candidates, type, containerRef, iframeRef]);
+  }, [candidates, type, containerRef, iframeRef, viewMode]);
 
   useLayoutEffect(() => {
     // Initial synchronous measure so notes are positioned on first paint.
@@ -153,7 +168,9 @@ export function StickyNoteLayer({
 
     // HTML panes: the iframe scrolls internally, so notes must be repositioned
     // on iframe scroll/resize and re-measured once the iframe finishes loading.
-    if (type === 'html') {
+    // Skipped entirely for live panes: contentDocument is cross-origin-null there, and
+    // attaching listeners to a cross-origin contentWindow would throw anyway.
+    if (type === 'html' && viewMode !== 'live') {
       const iframe = iframeRef.current;
       if (iframe) {
         const attach = () => {
@@ -183,7 +200,7 @@ export function StickyNoteLayer({
     return () => {
       for (const cleanup of cleanups) cleanup();
     };
-  }, [measure, type, containerRef, iframeRef]);
+  }, [measure, type, containerRef, iframeRef, viewMode]);
 
   const toggleExpand = (id: string) => {
     setExpandedId((prev) => (prev === id ? null : id));
