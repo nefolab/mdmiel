@@ -6,6 +6,7 @@ import { parseHash, generateHash, parseCommentRoute, ViewState } from './lib/anc
 import { Comment } from './lib/comments';
 import { listComments, getComment } from './lib/commentsApi';
 import { Theme, getInitialTheme, applyTheme } from './lib/theme';
+import { setViewMode } from './lib/viewMode';
 
 export default function App() {
   const [viewState, setViewState] = useState<ViewState>(() => parseHash(window.location.hash));
@@ -42,6 +43,15 @@ export default function App() {
       if (route) {
         getComment(route.id)
           .then((comment) => {
+            // A DOM-anchored comment only resolves in a 'live' pane (BridgeResolver):
+            // the static pane never executes the prototype's JS, so the element the
+            // comment refers to typically doesn't even exist in the raw HTML. Force
+            // the target file's persisted view mode to 'live' before opening it, so
+            // the link works even with an empty localStorage (e.g. private browsing)
+            // instead of silently landing on the default 'static' mode.
+            if (comment.anchor.type === 'dom') {
+              setViewMode(comment.path, 'live');
+            }
             setFocusCommentId(comment.id);
             window.location.hash = generateHash({ path: comment.path });
           })

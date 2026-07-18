@@ -491,6 +491,12 @@ export function SplitView({
       const ready = pane === 'left' ? leftAgentReady : rightAgentReady;
       const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
       if (!iframe?.contentWindow || !nonce || !ready) return; // Waits for the agent; effect re-runs on ready.
+      // Force a fresh anchor resolution right before scrolling: the pane may have been
+      // sitting on a different SPA screen since its last resolve, and while the agent's
+      // own MutationObserver should already keep liveRects current, re-requesting here
+      // is a cheap defensive measure so a followed sticky-note link never scrolls to (or
+      // flashes) a stale/incorrect position.
+      sendAnchorsToAgent(pane);
       iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'scrollTo', selector }, '*');
       setFlashCommentId(focusCommentId);
       onFocusHandled?.();

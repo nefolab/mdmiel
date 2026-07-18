@@ -7,6 +7,7 @@ import {
   nextOffset,
   partitionStackable,
   combineUnresolved,
+  buildLiveRawEntries,
   NotePlacementInput,
   NoteOffset,
 } from '../lib/stickyLayout';
@@ -110,25 +111,11 @@ export function StickyNoteLayer({
       const containerRect = container.getBoundingClientRect();
       const iframeRect = iframe.getBoundingClientRect();
       const iframeOffsetTop = iframeRect.top - containerRect.top;
-      for (const p of candidates) {
-        if (p.comment.anchor.type !== 'dom') {
-          // renderHtmlLive() はdata-source-line属性を注入しないため、旧来の行アンカー
-          // コメントはライブペインでは位置を特定できない (未解決ゾーンへ)。
-          raw.push({ id: p.comment.id, desiredTop: 0, present: false, visible: false });
-          continue;
-        }
-        const live = liveRects?.[p.comment.id];
-        if (!live || !live.found || !live.rect) {
-          raw.push({ id: p.comment.id, desiredTop: 0, present: false, visible: false });
-          continue;
-        }
-        raw.push({
-          id: p.comment.id,
-          desiredTop: iframeOffsetTop + live.rect.top,
-          present: true,
-          visible: live.visible,
-        });
-      }
+      // Pure function (lib/stickyLayout.ts): re-run in full against the latest liveRects
+      // snapshot every time it changes, so a comment whose element vanished (found:false,
+      // or dropped from the snapshot entirely) is reclassified into the unresolved zone
+      // immediately rather than keeping its last-known position.
+      raw.push(...buildLiveRawEntries(candidates, liveRects, iframeOffsetTop));
     } else {
       const iframe = iframeRef.current;
       const doc = iframe?.contentDocument;

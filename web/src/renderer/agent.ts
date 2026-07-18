@@ -192,10 +192,14 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
       resolveAll();
       scheduleRects();
     });
-    var observeRoot = document.documentElement || document.body;
-    if (observeRoot) {
-      observer.observe(observeRoot, { childList: true, subtree: true, attributes: true, characterData: true });
-    }
+    // claude designプロトタイプ ( claude.aiバンドル形式 ) は起動時に
+    // document.documentElement.replaceWith(...) でルート要素ごと差し替える。
+    // documentElementそのものを観測対象にすると、差し替え後のold nodeは
+    // ツリーから切り離されて二度とmutationを発生させず、observerは死んだままになる。
+    // documentノード自身はdocumentElementが何度差し替わっても不変なので、これを
+    // 観測すれば差し替え (documentへのchildList mutation) も、差し替え後の新しい
+    // ツリー内の変化 (subtree) も引き続き検知できる。張り直しは不要。
+    observer.observe(document, { childList: true, subtree: true, attributes: true, characterData: true });
   }
   // -------------------------------------------------------------------------
 

@@ -99,6 +99,67 @@ export function combineUnresolved(
   return [...orphaned, ...missing];
 }
 
+/**
+ * Per-comment measurement result for a 'live' pane, as reported by the BridgeResolver
+ * postMessage protocol (agent -> parent "rects" message). Structurally identical to
+ * StickyNoteLayer's `LiveRect` (kept as its own declaration here so this pure layout
+ * module has no dependency on the React component file); TypeScript's structural typing
+ * means a `LiveRect` value satisfies this type without any conversion.
+ */
+export interface LiveRectSnapshot {
+  found: boolean;
+  rect?: { top: number; left: number; width: number; height: number };
+  visible: boolean;
+}
+
+export interface LiveRawEntry {
+  id: string;
+  desiredTop: number;
+  present: boolean;
+  visible: boolean;
+}
+
+/**
+ * Maps each 'live'-pane candidate placement to its raw display entry using the
+ * BridgeResolver's latest liveRects snapshot.
+ *
+ * A candidate is `present` only when its anchor is DOM-typed AND liveRects reports
+ * `found: true` with a `rect` for its comment id. Every other case — a non-DOM anchor
+ * (line-anchored comments have no meaning in a live pane), the id missing from the
+ * snapshot entirely (not yet resolved, or dropped from the agent's known-anchors list),
+ * or an explicit `found: false` (the agent resolved the anchor once but the element has
+ * since left the DOM, e.g. after a SPA route change) — is `present: false`.
+ *
+ * This makes the "found:false / missing key -> unresolved zone" reclassification a pure
+ * function of the latest liveRects snapshot: the caller re-runs it every time liveRects
+ * changes (SplitView passes a fresh object on every "rects" message), so a comment can
+ * never keep displaying a stale position after its element disappears — it does not
+ * depend on any separate trigger such as the comment panel being toggled.
+ */
+export function buildLiveRawEntries(
+  candidates: ResolvedPlacement[],
+  liveRects: Record<string, LiveRectSnapshot> | undefined,
+  iframeOffsetTop: number
+): LiveRawEntry[] {
+  return candidates.map((p) => {
+    if (p.comment.anchor.type !== 'dom') {
+      // renderHtmlLive() はdata-source-line属性を注入しないため、旧来の行アンカー
+      // コメントはライブペインでは位置を特定できない (未解決ゾーンへ)。
+      return { id: p.comment.id, desiredTop: 0, present: false, visible: false };
+    }
+    const live = liveRects?.[p.comment.id];
+    if (!live || !live.found || !live.rect) {
+      return { id: p.comment.id, desiredTop: 0, present: false, visible: false };
+    }
+    return {
+      id: p.comment.id,
+      desiredTop: iframeOffsetTop + live.rect.top,
+      present: true,
+      visible: live.visible,
+    };
+  });
+}
+
 export interface NotePlacementInput {
   id: string;
   /** Ideal top coordinate derived from the anchored element's position. */
