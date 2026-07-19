@@ -323,7 +323,60 @@ body {
 
 .pane-actions {
   display: flex;
+  align-items: center;
   gap: 8px;
+}
+
+/* 静的/ライブ切替トグル ( theme-switcherと同系のUI ) */
+.view-mode-switcher-track {
+  display: flex;
+  gap: 2px;
+  background-color: var(--color-chip-bg);
+  border-radius: 999px;
+  padding: 2px;
+}
+
+.view-mode-switcher-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-muted);
+  border-radius: 999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.view-mode-switcher-btn:hover {
+  color: var(--color-text);
+}
+
+.view-mode-switcher-btn.active {
+  background-color: var(--color-accent);
+  color: var(--color-panel);
+}
+
+/* ライブペインの「コメント追加」armボタン ( 次の1クリックでDOM要素をpickする ) */
+.pane-add-comment-btn {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-muted);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.pane-add-comment-btn:hover {
+  color: var(--color-text);
+  border-color: var(--color-accent);
+}
+
+.pane-add-comment-btn.active {
+  background-color: var(--color-accent-soft);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
 }
 
 .pane-content {
@@ -859,6 +912,12 @@ body {
   user-select: none;
 }
 
+/* Briefly applied after following a "/#/comment/<id>" link, so the target card is easy
+   to spot among the others. Reuses the same flash color/timing as source-line-highlight. */
+.sticky-note-flash {
+  animation: highlightPulse 3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+
 /* Header: author dot + name + badges + line number. Doubles as the drag
    handle for floating notes; orphan-zone notes render it but aren't draggable. */
 .sticky-note-header {
@@ -917,6 +976,27 @@ body {
   font-size: 9.5px;
   opacity: 0.5;
   flex: none;
+}
+
+/* "リンクをコピー" ( /#/comment/<id> ). Common to markdown/static-html/live cards. */
+.sticky-note-btn-link {
+  background: transparent;
+  border: none;
+  color: var(--color-note-text);
+  opacity: 0.55;
+  padding: 2px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex: none;
+  transition: opacity 0.15s, background-color 0.15s;
+}
+
+.sticky-note-btn-link:hover {
+  opacity: 1;
+  background-color: rgba(0, 0, 0, 0.08);
 }
 
 .sticky-note-excerpt {

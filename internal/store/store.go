@@ -11,10 +11,20 @@ var ErrNotFound = errors.New("comment not found")
 // Anchor はコメントが紐づくソース行の位置情報。
 // 行番号だけでなく前後テキストのハッシュも持たせ、ファイル更新で行がずれても
 // snippet 再マッチで表示位置を補正できるようにする ( docs/requirements.md F10 )。
+//
+// Type/Selectorはライブプロトタイプレビュー ( DOMアンカー ) 向けのoptionalフィールド。
+// Typeが "dom" のとき、SelectorにDOM要素の安定セレクタ ( id/data-testid優先、
+// 無ければタグ+nth-of-typeのパス ) を保持する。Typeが空の場合は従来通りの行アンカーを表す。
+// DOMアンカーではSnippet/SnippetHashも流用し、それぞれ要素テキスト ( trim+空白圧縮 ) と
+// そのFNV-1aハッシュを保持する ( 再解決時にセレクタが失われても全要素走査でテキスト一致を
+// 探せるようにするため )。既存の行アンカー用フィールドを増やさず流用することで、
+// Comment.Versionを据え置いたまま後方互換に拡張できる。
 type Anchor struct {
 	Line        int    `json:"line"`
 	Snippet     string `json:"snippet"`
 	SnippetHash string `json:"snippetHash"`
+	Type        string `json:"type,omitempty"`
+	Selector    string `json:"selector,omitempty"`
 }
 
 // NoteOffset はコメントの付箋UI表示位置を、アンカー基準からのドラッグ差分 ( dx, dy ) として

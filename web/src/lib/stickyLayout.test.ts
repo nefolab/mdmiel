@@ -7,6 +7,8 @@ import {
   nextOffset,
   partitionStackable,
   combineUnresolved,
+  buildLiveRawEntries,
+  ResolvedPlacement,
 } from './stickyLayout';
 import { Comment, computeSnippet, snippetHash } from './comments';
 
@@ -44,6 +46,30 @@ describe('resolvePlacements', () => {
 
     expect(placements[0]).toEqual({ comment: commentOnBeta, line: 3, orphaned: false });
     expect(placements[1]).toEqual({ comment: commentGone, line: 2, orphaned: true });
+  });
+
+  it('bypasses text-based rematching for DOM-anchored comments (never orphaned at this level)', () => {
+    const domComment: Comment = {
+      version: 1,
+      id: 'dom-1',
+      path: 'mock.html',
+      anchor: {
+        line: 0,
+        snippet: 'Submit',
+        snippetHash: snippetHash(computeSnippet('Submit')),
+        type: 'dom',
+        selector: '#submit-btn',
+      },
+      body: 'dom comment',
+      author: 'nefo',
+      createdAt: '2026-07-18T00:00:00Z',
+      resolved: false,
+    };
+    // Content has nothing resembling the DOM snippet anywhere; a text-based rematch
+    // would report orphaned:true, but DOM anchors must skip that pass entirely.
+    const content = ['<html>', '<body>completely unrelated text</body>', '</html>'].join('\n');
+    const placements = resolvePlacements([domComment], content);
+    expect(placements).toEqual([{ comment: domComment, line: 0, orphaned: false }]);
   });
 });
 
@@ -209,6 +235,92 @@ describe('combineUnresolved', () => {
     const o1 = makeComment('o1', 1, 'a');
     const orphaned = [{ comment: o1, line: 1, orphaned: true }];
     expect(combineUnresolved(orphaned, [])).toEqual(orphaned);
+  });
+});
+
+function makeDomComment(id: string, selector = '#el'): Comment {
+  return {
+    version: 1,
+    id,
+    path: 'mock.html',
+    anchor: {
+      line: 0,
+      snippet: 'Submit',
+      snippetHash: snippetHash(computeSnippet('Submit')),
+      type: 'dom',
+      selector,
+    },
+    body: `body ${id}`,
+    author: 'nefo',
+    createdAt: '2026-07-18T00:00:00Z',
+    resolved: false,
+  };
+}
+
+describe('buildLiveRawEntries', () => {
+  it('marks a DOM-anchored candidate present with the rect-derived desiredTop when liveRects reports found:true', () => {
+    const c = makeDomComment('a');
+    const candidates: ResolvedPlacement[] = [{ comment: c, line: 0, orphaned: false }];
+    const liveRects = { a: { found: true, rect: { top: 120, left: 0, width: 10, height: 10 }, visible: true } };
+
+    const raw = buildLiveRawEntries(candidates, liveRects, /* iframeOffsetTop */ 50);
+
+    expect(raw).toEqual([{ id: 'a', desiredTop: 170, present: true, visible: true }]);
+  });
+
+  it('marks present:false when liveRects reports found:false for the id (element resolved once, now gone)', () => {
+    const c = makeDomComment('a');
+    const candidates: ResolvedPlacement[] = [{ comment: c, line: 0, orphaned: false }];
+    const liveRects = { a: { found: false, visible: false } };
+
+    const raw = buildLiveRawEntries(candidates, liveRects, 50);
+
+    expect(raw).toEqual([{ id: 'a', desiredTop: 0, present: false, visible: false }]);
+  });
+
+  it('marks present:false when the id is entirely missing from the liveRects snapshot (not yet resolved, or dropped)', () => {
+    const c = makeDomComment('a');
+    const candidates: ResolvedPlacement[] = [{ comment: c, line: 0, orphaned: false }];
+
+    // Snapshot has entries for other ids, but not this candidate's.
+    const raw = buildLiveRawEntries(candidates, { other: { found: true, rect: { top: 1, left: 1, width: 1, height: 1 }, visible: true } }, 50);
+
+    expect(raw).toEqual([{ id: 'a', desiredTop: 0, present: false, visible: false }]);
+  });
+
+  it('marks present:false when liveRects itself is undefined (agent has not sent anything yet)', () => {
+    const c = makeDomComment('a');
+    const candidates: ResolvedPlacement[] = [{ comment: c, line: 0, orphaned: false }];
+
+    const raw = buildLiveRawEntries(candidates, undefined, 50);
+
+    expect(raw).toEqual([{ id: 'a', desiredTop: 0, present: false, visible: false }]);
+  });
+
+  it('marks present:false for a non-DOM (line-anchored) candidate even if liveRects happens to have a matching id', () => {
+    const lineComment = makeComment('a', 3, 'gamma');
+    const candidates: ResolvedPlacement[] = [{ comment: lineComment, line: 3, orphaned: false }];
+    const liveRects = { a: { found: true, rect: { top: 10, left: 0, width: 1, height: 1 }, visible: true } };
+
+    const raw = buildLiveRawEntries(candidates, liveRects, 0);
+
+    expect(raw).toEqual([{ id: 'a', desiredTop: 0, present: false, visible: false }]);
+  });
+
+  it('reclassifies the same candidate as its liveRects entry changes across calls (found -> gone -> found again)', () => {
+    const c = makeDomComment('a');
+    const candidates: ResolvedPlacement[] = [{ comment: c, line: 0, orphaned: false }];
+
+    const step1 = buildLiveRawEntries(candidates, { a: { found: true, rect: { top: 5, left: 0, width: 1, height: 1 }, visible: true } }, 0);
+    expect(step1[0].present).toBe(true);
+
+    // SPA navigated away: the agent's next mutation-triggered resend reports found:false.
+    const step2 = buildLiveRawEntries(candidates, { a: { found: false, visible: false } }, 0);
+    expect(step2[0].present).toBe(false);
+
+    // SPA navigated back and the element re-resolved.
+    const step3 = buildLiveRawEntries(candidates, { a: { found: true, rect: { top: 8, left: 0, width: 1, height: 1 }, visible: true } }, 0);
+    expect(step3[0]).toEqual({ id: 'a', desiredTop: 8, present: true, visible: true });
   });
 });
 

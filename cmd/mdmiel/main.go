@@ -3,10 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"mdmiel/internal/server"
 	"mdmiel/internal/store"
 	"mdmiel/web"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"

@@ -22,13 +22,13 @@ func TestServer(t *testing.T) {
 
 	// テスト用のファイル配置
 	filesToCreate := map[string]string{
-		"spec.md":                 "# Specification",
-		"mock.html":               "<html></html>",
-		"style.css":               "body {}",
+		"spec.md":                   "# Specification",
+		"mock.html":                 "<html></html>",
+		"style.css":                 "body {}",
 		".mdmiel/comments/123.json": `{"id":"123"}`,
-		"node_modules/dep/a.md":   "# Dependency",
-		".git/config":             "git config",
-		"sub/doc.md":              "# Sub Doc",
+		"node_modules/dep/a.md":     "# Dependency",
+		".git/config":               "git config",
+		"sub/doc.md":                "# Sub Doc",
 	}
 
 	for rel, content := range filesToCreate {
@@ -416,6 +416,63 @@ func TestCommentsAPI(t *testing.T) {
 	})
 }
 
+// TestCommentGetByID は GET /api/comments/{id} の200 ( 作成→取得一致 ) / 404 ( 未知ID ) /
+// 不正ID形式 ( 既存のPATCH/DELETEハンドラの慣例に合わせ400 ) を確認する。
+func TestCommentGetByID(t *testing.T) {
+	handler, _ := newCommentsTestServer(t)
+
+	createBody := `{"path":"spec.md","anchor":{"line":1,"snippet":"# Spec","snippetHash":"h1"},"body":"gettable comment"}`
+	req := httptest.NewRequest("POST", "/api/comments", strings.NewReader(createBody))
+	req.Host = "127.0.0.1:8686"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var created store.Comment
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("failed to decode created comment: %v", err)
+	}
+
+	t.Run("GET existing id returns 200 and matches created comment", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments/"+created.ID, nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var got store.Comment
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if got.ID != created.ID || got.Body != created.Body || got.Path != created.Path {
+			t.Errorf("expected comment to match created one, got %+v", got)
+		}
+	})
+
+	t.Run("GET unknown id returns 404", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments/00000000-0000-4000-8000-000000000000", nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", rec.Code)
+		}
+	})
+
+	t.Run("GET malformed id returns 400 (matches PATCH/DELETE convention)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments/a/b", nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d", rec.Code)
+		}
+	})
+}
+
 // TestCommentIDValidationRejectsTraversal はidパラメータを介したトラバーサル試行が
 // 拒否されることを確認する。
 //
@@ -583,6 +640,65 @@ func TestOriginValidation(t *testing.T) {
 		handler.ServeHTTP(rec, newPostReq("http://localhost:8686"))
 		if rec.Code != http.StatusCreated {
 			t.Errorf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	// M2: Origin検証は状態変更メソッドに限らず、Originヘッダを持つ全リクエストが対象。
+	t.Run("GET with disallowed origin rejected (403)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments?path=spec.md", nil)
+		req.Host = "127.0.0.1:8686"
+		req.Header.Set("Origin", "http://evil.com")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("expected 403, got %d", rec.Code)
+		}
+	})
+}
+
+// H3+L5: POST /api/comments のAnchorバリデーション。
+// type は ""(行アンカー) か "dom"(DOM要素アンカー) のみ許可し、それ以外は400。
+// type=="dom" のときはselectorが必須で、空なら400。
+func TestCommentsCreateAnchorValidation(t *testing.T) {
+	handler, _ := newCommentsTestServer(t)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/comments", strings.NewReader(body))
+		req.Host = "127.0.0.1:8686"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("unknown anchor.type rejected (400)", func(t *testing.T) {
+		body := `{"path":"spec.md","anchor":{"line":1,"snippet":"# Spec","snippetHash":"h","type":"bogus"},"body":"c"}`
+		rec := post(body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("anchor.type dom with empty selector rejected (400)", func(t *testing.T) {
+		body := `{"path":"spec.md","anchor":{"line":0,"snippet":"Submit","snippetHash":"h","type":"dom","selector":""},"body":"c"}`
+		rec := post(body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("anchor.type dom with selector accepted (201)", func(t *testing.T) {
+		body := `{"path":"spec.md","anchor":{"line":0,"snippet":"Submit","snippetHash":"h","type":"dom","selector":"#submit-btn"},"body":"c"}`
+		rec := post(body)
+		if rec.Code != http.StatusCreated {
+			t.Errorf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var created store.Comment
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("failed to decode created comment: %v", err)
+		}
+		if created.Anchor.Type != "dom" || created.Anchor.Selector != "#submit-btn" {
+			t.Errorf("unexpected anchor persisted: %+v", created.Anchor)
 		}
 	})
 }

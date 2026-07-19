@@ -4,9 +4,9 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
-	"mdmiel/internal/store"
 	"io/fs"
 	"math"
+	"mdmiel/internal/store"
 	"net"
 	"net/http"
 	"net/url"
@@ -129,6 +129,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/file", s.handleFile)
 	mux.HandleFunc("GET /api/comments", s.handleCommentsList)
 	mux.HandleFunc("POST /api/comments", s.handleCommentsCreate)
+	mux.HandleFunc("GET /api/comments/{id...}", s.handleCommentGet)
 	mux.HandleFunc("PATCH /api/comments/{id...}", s.handleCommentUpdate)
 	mux.HandleFunc("DELETE /api/comments/{id...}", s.handleCommentDelete)
 	mux.HandleFunc("GET /raw/", s.handleRaw)
@@ -156,14 +157,13 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
-		// CSRF対策: 状態変更メソッド ( POST/PATCH/DELETE ) のみOriginヘッダを検証する。
+		// CSRF対策: Originヘッダが存在するリクエストは、メソッドを問わず全て検証する
+		// ( GET等の読み取り専用リクエストも対象。悪意あるページからのクロスオリジン
+		// fetch/XHRでコメント内容等を読み取られるのを防ぐため )
 		// Originヘッダが無いリクエスト ( curl・同一オリジンナビゲーション ) は許可する。
-		switch r.Method {
-		case http.MethodPost, http.MethodPatch, http.MethodDelete:
-			if origin := r.Header.Get("Origin"); origin != "" && !isAllowedOrigin(origin) {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
+		if origin := r.Header.Get("Origin"); origin != "" && !isAllowedOrigin(origin) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
 		}
 
 		mux.ServeHTTP(w, r)
@@ -432,6 +432,9 @@ func (s *Server) handleCommentsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// コメント一覧は編集操作のたびに変わりうる ( ブラウザ/中間キャッシュによる古いデータの
+	// 表示を防ぐ )。
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(CommentsResponse{Comments: comments})
 }
@@ -454,6 +457,16 @@ func (s *Server) handleCommentsCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "body is required", http.StatusBadRequest)
 		return
 	}
+	// Anchor.Typeは ""(行アンカー) か "dom"(DOM要素アンカー) のみを許可する。
+	// type=="dom" のときはselectorが要素を再解決するための必須情報なので、空なら拒否する。
+	if req.Anchor.Type != "" && req.Anchor.Type != "dom" {
+		http.Error(w, "anchor.type must be \"dom\" or omitted", http.StatusBadRequest)
+		return
+	}
+	if req.Anchor.Type == "dom" && req.Anchor.Selector == "" {
+		http.Error(w, "anchor.selector is required when anchor.type is \"dom\"", http.StatusBadRequest)
+		return
+	}
 
 	created, err := s.store.Create(store.Comment{
 		Path:   filepath.ToSlash(req.Path),
@@ -469,6 +482,31 @@ func (s *Server) handleCommentsCreate(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(created)
+}
+
+// handleCommentGet は GET /api/comments/{id} を処理する。
+// 付箋リンク ( /#/comment/<id> ) からコメント単体を取得するために使う。
+func (s *Server) handleCommentGet(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if !isValidCommentID(id) {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	c, err := s.store.Get(id)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// コメント単体も編集操作のたびに変わりうるため一覧同様にキャッシュさせない。
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(c)
 }
 
 // handleCommentUpdate は PATCH /api/comments/{id} を処理する。
