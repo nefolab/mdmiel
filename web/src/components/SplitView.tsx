@@ -149,6 +149,15 @@ export function SplitView({
   const liveBridgeRef = useRef<Partial<Record<'left' | 'right', { nonce: string; path: string; armed: boolean }>>>(
     {}
   );
+  // Holds the pending auto-dismiss timer id for the toast, so a new showToast() call
+  // clears any still-pending timer from a previous call instead of letting an earlier
+  // timer clear a message that a later call just set.
+  const toastTimerRef = useRef<number | null>(null);
+  // One-shot guard for the comment-link focus effect below: records the last
+  // focusCommentId that has actually been scrolled to + flash-highlighted, so a re-run
+  // of that effect for the same id (triggered by one of its many volatile deps changing)
+  // doesn't scroll/flash a second time.
+  const focusHandledIdRef = useRef<string | null>(null);
 
   const leftPath = viewState.path || viewState.left;
   const rightPath = viewState.right;
@@ -324,6 +333,28 @@ export function SplitView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rightViewMode, rightAgentReady, rightComments, rightNonce]);
 
+  // Tells the pane's agent whether "コメント追加" is armed, so the agent only sends a
+  // "pick" message for the next click while armed (instead of unconditionally on every
+  // click). The parent's bridge.armed check (message listener above) is kept as a
+  // defense-in-depth backstop even though the agent should no longer send pick when
+  // unarmed.
+  const sendCommentMode = (pane: 'left' | 'right', on: boolean) => {
+    const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
+    const nonce = pane === 'left' ? leftNonce : rightNonce;
+    if (!iframe?.contentWindow || !nonce) return;
+    iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'commentMode', on }, '*');
+  };
+
+  useEffect(() => {
+    if (leftViewMode === 'live' && leftAgentReady) sendCommentMode('left', leftArmed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leftViewMode, leftAgentReady, leftArmed, leftNonce]);
+
+  useEffect(() => {
+    if (rightViewMode === 'live' && rightAgentReady) sendCommentMode('right', rightArmed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rightViewMode, rightAgentReady, rightArmed, rightNonce]);
+
   const handleToggleArmed = (pane: 'left' | 'right') => {
     if (pane === 'left') setLeftArmed((v) => !v);
     else setRightArmed((v) => !v);
@@ -331,7 +362,13 @@ export function SplitView({
 
   const showToast = (message: string) => {
     setToastMessage(message);
-    setTimeout(() => setToastMessage(null), 3000);
+    if (toastTimerRef.current !== null) {
+      window.clearTimeout(toastTimerRef.current);
+    }
+    toastTimerRef.current = window.setTimeout(() => {
+      toastTimerRef.current = null;
+      setToastMessage(null);
+    }, 3000);
   };
 
   const fetchFile = async (filePath: string): Promise<PaneData> => {
@@ -354,28 +391,46 @@ export function SplitView({
     };
   };
 
-  // Load left pane data
+  // Load left pane data. The cancelled flag guards against a fast path switch: if the
+  // user re-selects a different left file before the previous fetchFile() resolves, the
+  // stale response must not overwrite the state that the newer effect run already set.
   useEffect(() => {
+    let cancelled = false;
     if (leftPath) {
       setLeftError(null);
       fetchFile(leftPath)
-        .then((data) => setLeftData(data))
-        .catch((err) => setLeftError(err.message));
+        .then((data) => {
+          if (!cancelled) setLeftData(data);
+        })
+        .catch((err) => {
+          if (!cancelled) setLeftError(err.message);
+        });
     } else {
       setLeftData(null);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [leftPath]);
 
-  // Load right pane data
+  // Load right pane data (same fast-switch race guard as the left pane above).
   useEffect(() => {
+    let cancelled = false;
     if (rightPath) {
       setRightError(null);
       fetchFile(rightPath)
-        .then((data) => setRightData(data))
-        .catch((err) => setRightError(err.message));
+        .then((data) => {
+          if (!cancelled) setRightData(data);
+        })
+        .catch((err) => {
+          if (!cancelled) setRightError(err.message);
+        });
     } else {
       setRightData(null);
     }
+    return () => {
+      cancelled = true;
+    };
   }, [rightPath]);
 
   // Share loaded pane content (path/type/content) with the parent so it can
@@ -473,6 +528,12 @@ export function SplitView({
   // instead asks its agent to scroll via the "scrollTo" postMessage.
   useEffect(() => {
     if (!focusCommentId) return;
+    // One-shot guard: this effect's dependency list includes several values (comments
+    // lists, agent-ready flags, nonces, ...) that can legitimately change more than once
+    // while focusCommentId itself stays the same (e.g. App hasn't committed the
+    // setFocusCommentId(null) from onFocusHandled yet). Without this guard a re-run for
+    // the same id would scroll to and re-flash the target a second time.
+    if (focusHandledIdRef.current === focusCommentId) return;
 
     const leftHit = leftComments.find((c) => c.id === focusCommentId);
     const rightHit = !leftHit ? rightComments.find((c) => c.id === focusCommentId) : undefined;
@@ -499,6 +560,7 @@ export function SplitView({
       sendAnchorsToAgent(pane);
       iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'scrollTo', selector }, '*');
       setFlashCommentId(focusCommentId);
+      focusHandledIdRef.current = focusCommentId;
       onFocusHandled?.();
       return;
     }
@@ -511,6 +573,7 @@ export function SplitView({
       scrollToLine(paneRef, targetIframeRef, data.type, line, selectorOverride);
     }, 150);
     setFlashCommentId(focusCommentId);
+    focusHandledIdRef.current = focusCommentId;
     onFocusHandled?.();
     return () => window.clearTimeout(scrollTimer);
     // eslint-disable-next-line react-hooks/exhaustive-deps

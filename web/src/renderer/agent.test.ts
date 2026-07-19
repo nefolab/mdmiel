@@ -155,3 +155,130 @@ describe('renderAgentScript', () => {
     expect(script).toContain('send({ type: "rects", rects: rects });');
   });
 });
+
+/**
+ * Extracts the raw source text of a top-level `function <name>(...) { ... }` declaration
+ * (same brace-counting approach as extractFunction above), without evaluating it. Used by
+ * buildResolveOne() to splice resolveOne() together with the helper functions its body
+ * calls (fnv1aHash, extractText) into one evaluable scope, since resolveOne can't be
+ * extracted and called in isolation the way a self-contained function like fnv1aHash can.
+ */
+function extractFunctionSource(script: string, name: string): string {
+  const marker = `function ${name}(`;
+  const start = script.indexOf(marker);
+  if (start === -1) throw new Error(`function ${name} not found in agent script`);
+  const braceStart = script.indexOf('{', start);
+  let depth = 0;
+  let end = -1;
+  for (let i = braceStart; i < script.length; i++) {
+    if (script[i] === '{') depth++;
+    else if (script[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        end = i;
+        break;
+      }
+    }
+  }
+  if (end === -1) throw new Error(`could not find end of function ${name}`);
+  return script.slice(start, end + 1);
+}
+
+/**
+ * Builds a callable resolveOne(anchor) from the rendered agent script by splicing together
+ * its MAX_TEXT_HASH_SCAN declaration, fnv1aHash, extractText and resolveOne itself into one
+ * `new Function` body (evaluated in the test's global scope, so it sees jsdom's `document`).
+ * Lets M1's scan-cap behavior be exercised against real DOM nodes instead of just asserting
+ * on the script text.
+ */
+function buildResolveOne(
+  script: string
+): (anchor: { selector?: string; snippetHash: string }) => Element | null {
+  const constMatch = script.match(/var MAX_TEXT_HASH_SCAN = \d+;/);
+  if (!constMatch) throw new Error('MAX_TEXT_HASH_SCAN declaration not found in agent script');
+  const fnv1a = extractFunctionSource(script, 'fnv1aHash');
+  const extractTextSrc = extractFunctionSource(script, 'extractText');
+  const resolveOneSrc = extractFunctionSource(script, 'resolveOne');
+  const combined = [constMatch[0], fnv1a, extractTextSrc, resolveOneSrc, 'return resolveOne;'].join('\n');
+  // eslint-disable-next-line no-new-func
+  return new Function(combined)();
+}
+
+describe('M1: resolveOne text-hash fallback scan is capped', () => {
+  it('declares a named MAX_TEXT_HASH_SCAN = 5000 constant used as the querySelectorAll("*") scan limit', () => {
+    const script = renderAgentScript('n');
+    expect(script).toContain('var MAX_TEXT_HASH_SCAN = 5000;');
+    expect(script).toContain('var scanLimit = Math.min(all.length, MAX_TEXT_HASH_SCAN);');
+    expect(script).toContain('for (var i = 0; i < scanLimit; i++) {');
+  });
+
+  it('finds a text-hash match that falls within the scan cap', () => {
+    const script = renderAgentScript('n').replace(
+      'var MAX_TEXT_HASH_SCAN = 5000;',
+      'var MAX_TEXT_HASH_SCAN = 10;'
+    );
+    const resolveOne = buildResolveOne(script);
+
+    document.body.innerHTML = '';
+    for (let i = 0; i < 5; i++) {
+      const div = document.createElement('div');
+      div.textContent = i === 3 ? 'target-text' : 'filler';
+      document.body.appendChild(div);
+    }
+
+    const found = resolveOne({ selector: '', snippetHash: snippetHash('target-text') });
+    expect(found).not.toBeNull();
+    expect(found!.textContent).toBe('target-text');
+  });
+
+  it('gives up (returns null) once the match falls beyond the scan cap, instead of scanning the full tree', () => {
+    const script = renderAgentScript('n').replace(
+      'var MAX_TEXT_HASH_SCAN = 5000;',
+      'var MAX_TEXT_HASH_SCAN = 10;'
+    );
+    const resolveOne = buildResolveOne(script);
+
+    document.body.innerHTML = '';
+    // document.querySelectorAll("*") also includes <html>/<head>/<body> ahead of these
+    // divs, so appending 20 filler-then-target divs safely pushes the match well past a
+    // cap of 10.
+    for (let i = 0; i < 20; i++) {
+      const div = document.createElement('div');
+      div.textContent = i === 15 ? 'target-text' : 'filler';
+      document.body.appendChild(div);
+    }
+
+    const found = resolveOne({ selector: '', snippetHash: snippetHash('target-text') });
+    expect(found).toBeNull();
+  });
+});
+
+describe('L1: agent only sends "pick" while comment mode is armed', () => {
+  it('click handler bails out immediately when commentModeOn is false (no unconditional pick send)', () => {
+    const script = renderAgentScript('n');
+    expect(script).toContain('var commentModeOn = false;');
+    expect(script).toMatch(
+      /document\.addEventListener\("click", function \(e\) \{\s*if \(!commentModeOn\) return;/
+    );
+  });
+
+  it('flips commentModeOn from a parent {type:"commentMode", on} message', () => {
+    const script = renderAgentScript('n');
+    expect(script).toContain('data.type === "commentMode" && typeof data.on === "boolean"');
+    expect(script).toContain('commentModeOn = data.on;');
+  });
+});
+
+describe('additional hardening: parent-message origin pinning when ancestorOrigins is unavailable', () => {
+  it('pins the origin of the first nonce-matching message and rejects later messages from a different origin', () => {
+    const script = renderAgentScript('n');
+    expect(script).toContain('var pinnedOrigin = null;');
+    // Pinning check only applies when ancestorOrigins couldn't be read (parentOrigin is null);
+    // when parentOrigin is available it already fully validates origin on its own.
+    expect(script).toContain(
+      'if (!parentOrigin && pinnedOrigin !== null && event.origin !== pinnedOrigin) return;'
+    );
+    expect(script).toContain('if (!parentOrigin && pinnedOrigin === null) {');
+    expect(script).toContain('pinnedOrigin = event.origin;');
+  });
+});

@@ -22,6 +22,12 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
     }
   } catch (e) {}
 
+  // ancestorOrigins が取得できない環境 ( Firefox/Safari等 ) 向けの追加防御: nonce一致で
+  // 最初に受理したメッセージの event.origin を記憶し、以降はそのoriginのみ受理する
+  // ( pinning )。nonceはURLに埋め込まれず親から直接注入されるため単体でも十分頑丈だが、
+  // 万一nonceが漏れても以後は送信元originを固定できるようにする多層防御。
+  var pinnedOrigin = null;
+
   function send(msg) {
     try {
       var payload = { mdmiel: true, nonce: NONCE };
@@ -121,6 +127,12 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   var anchors = [];
   var resolvedMap = {};
 
+  // querySelectorAll("*")によるテキストハッシュ総当たりフォールバックの走査上限。
+  // 巨大なDOMツリー ( 数万要素規模のプロトタイプ ) でMutationObserver発火のたびに
+  // 全要素のtextContent抽出+FNV-1aハッシュ計算を行うとメインスレッドを長時間ブロック
+  // しうるため、上限を超えたら見つからなかった ( found:false ) ものとして打ち切る。
+  var MAX_TEXT_HASH_SCAN = 5000;
+
   function resolveOne(anchor) {
     var el = null;
     if (anchor.selector) {
@@ -135,7 +147,8 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
     }
     // セレクタ不一致/テキスト不一致: 全要素走査でテキストハッシュが一致する最初の要素を探す。
     var all = document.querySelectorAll("*");
-    for (var i = 0; i < all.length; i++) {
+    var scanLimit = Math.min(all.length, MAX_TEXT_HASH_SCAN);
+    for (var i = 0; i < scanLimit; i++) {
       if (fnv1aHash(extractText(all[i])) === anchor.snippetHash) {
         return all[i];
       }
@@ -206,7 +219,13 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   window.addEventListener("scroll", function () { scheduleGeometry("scroll"); scheduleRects(); }, { passive: true });
   window.addEventListener("resize", function () { scheduleGeometry("resize"); scheduleRects(); });
 
+  // "コメント追加"がarmされている間だけtrue。親からの{type:"commentMode",on}で
+  // 切り替わる。offの間はクリックのたびにpickを送らない ( 無条件送信をやめる。親側の
+  // bridge.armedチェックは防御として残るが、agent側でも不要な送信自体を止める )。
+  var commentModeOn = false;
+
   document.addEventListener("click", function (e) {
+    if (!commentModeOn) return;
     var el = e.target;
     if (!el || el.nodeType !== 1) return;
     var text = extractText(el);
@@ -222,14 +241,20 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
 
   window.addEventListener("message", function (event) {
     if (parentOrigin && event.origin !== parentOrigin) return;
+    if (!parentOrigin && pinnedOrigin !== null && event.origin !== pinnedOrigin) return;
     var data = event.data;
     if (!data || typeof data !== "object" || data.nonce !== NONCE) return;
+    if (!parentOrigin && pinnedOrigin === null) {
+      pinnedOrigin = event.origin;
+    }
     if (data.type === "ping") {
       send({ type: "pong" });
     } else if (data.type === "anchors" && data.anchors && typeof data.anchors.length === "number") {
       anchors = data.anchors;
       resolveAll();
       scheduleRects();
+    } else if (data.type === "commentMode" && typeof data.on === "boolean") {
+      commentModeOn = data.on;
     } else if (data.type === "scrollTo" && typeof data.selector === "string") {
       var target = null;
       try {

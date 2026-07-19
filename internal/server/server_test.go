@@ -642,4 +642,63 @@ func TestOriginValidation(t *testing.T) {
 			t.Errorf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 		}
 	})
+
+	// M2: Origin検証は状態変更メソッドに限らず、Originヘッダを持つ全リクエストが対象。
+	t.Run("GET with disallowed origin rejected (403)", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments?path=spec.md", nil)
+		req.Host = "127.0.0.1:8686"
+		req.Header.Set("Origin", "http://evil.com")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Errorf("expected 403, got %d", rec.Code)
+		}
+	})
+}
+
+// H3+L5: POST /api/comments のAnchorバリデーション。
+// type は ""(行アンカー) か "dom"(DOM要素アンカー) のみ許可し、それ以外は400。
+// type=="dom" のときはselectorが必須で、空なら400。
+func TestCommentsCreateAnchorValidation(t *testing.T) {
+	handler, _ := newCommentsTestServer(t)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/comments", strings.NewReader(body))
+		req.Host = "127.0.0.1:8686"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+
+	t.Run("unknown anchor.type rejected (400)", func(t *testing.T) {
+		body := `{"path":"spec.md","anchor":{"line":1,"snippet":"# Spec","snippetHash":"h","type":"bogus"},"body":"c"}`
+		rec := post(body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("anchor.type dom with empty selector rejected (400)", func(t *testing.T) {
+		body := `{"path":"spec.md","anchor":{"line":0,"snippet":"Submit","snippetHash":"h","type":"dom","selector":""},"body":"c"}`
+		rec := post(body)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("anchor.type dom with selector accepted (201)", func(t *testing.T) {
+		body := `{"path":"spec.md","anchor":{"line":0,"snippet":"Submit","snippetHash":"h","type":"dom","selector":"#submit-btn"},"body":"c"}`
+		rec := post(body)
+		if rec.Code != http.StatusCreated {
+			t.Errorf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+		}
+		var created store.Comment
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+			t.Fatalf("failed to decode created comment: %v", err)
+		}
+		if created.Anchor.Type != "dom" || created.Anchor.Selector != "#submit-btn" {
+			t.Errorf("unexpected anchor persisted: %+v", created.Anchor)
+		}
+	})
 }

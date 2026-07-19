@@ -37,12 +37,14 @@ export default function App() {
   // for SplitView's scroll+flash. Unknown ids are logged and otherwise left on the "select a
   // file" fallback screen (no toast mechanism exists at this level).
   useEffect(() => {
+    let cancelled = false;
     const processHash = () => {
       const hash = window.location.hash;
       const route = parseCommentRoute(hash);
       if (route) {
         getComment(route.id)
           .then((comment) => {
+            if (cancelled) return; // Unmounted while the fetch was in flight; drop the result.
             // A DOM-anchored comment only resolves in a 'live' pane (BridgeResolver):
             // the static pane never executes the prototype's JS, so the element the
             // comment refers to typically doesn't even exist in the raw HTML. Force
@@ -56,7 +58,7 @@ export default function App() {
             window.location.hash = generateHash({ path: comment.path });
           })
           .catch((err) => {
-            console.error('コメントの取得に失敗しました:', err);
+            if (!cancelled) console.error('コメントの取得に失敗しました:', err);
           });
         return;
       }
@@ -64,7 +66,10 @@ export default function App() {
     };
     processHash();
     window.addEventListener('hashchange', processHash);
-    return () => window.removeEventListener('hashchange', processHash);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('hashchange', processHash);
+    };
   }, []);
 
   // 起動時・切替時にdata-theme属性とlocalStorageへ反映する。
