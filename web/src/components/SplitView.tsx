@@ -1,12 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ViewState, generateHash } from '../lib/anchor';
 import { Comment, CommentAnchor, computeSnippet, snippetHash } from '../lib/comments';
 import { createComment } from '../lib/commentsApi';
-import { StickyNoteLayer, LiveRect } from './StickyNoteLayer';
+import { StickyNoteLayer } from './StickyNoteLayer';
 import { resolvePlacements } from '../lib/stickyLayout';
 import { renderMarkdown } from '../renderer/markdown';
 import { renderHtml, renderHtmlLive } from '../renderer/html';
 import { ViewMode, getViewMode, setViewMode as persistViewMode } from '../lib/viewMode';
+import { useLiveAgentBridge, LiveAgentPickResult } from '../hooks/useLiveAgentBridge';
 
 interface PaneData {
   path: string;
@@ -113,17 +114,6 @@ export function SplitView({
   const [commentDraft, setCommentDraft] = useState<CommentDraft | null>(null);
   const [leftViewMode, setLeftViewMode] = useState<ViewMode>('static');
   const [rightViewMode, setRightViewMode] = useState<ViewMode>('static');
-  // BridgeResolver measurement (agent -> parent "rects" message), keyed by comment id.
-  const [leftLiveRects, setLeftLiveRects] = useState<Record<string, LiveRect>>({});
-  const [rightLiveRects, setRightLiveRects] = useState<Record<string, LiveRect>>({});
-  // Flips true once the live pane's measurement agent has sent its "ready" message;
-  // gates sendAnchorsToAgent (no point posting anchors before the agent is listening).
-  const [leftAgentReady, setLeftAgentReady] = useState(false);
-  const [rightAgentReady, setRightAgentReady] = useState(false);
-  // "コメント追加" armed state: while true, the next "pick" message from that pane's
-  // agent opens the comment composer instead of being ignored. Auto-disarms after one pick.
-  const [leftArmed, setLeftArmed] = useState(false);
-  const [rightArmed, setRightArmed] = useState(false);
   // Comment id to briefly flash-highlight on its sticky-note card (set once a
   // /#/comment/<id> link has been resolved and its pane/anchor located).
   const [flashCommentId, setFlashCommentId] = useState<string | null>(null);
@@ -142,13 +132,6 @@ export function SplitView({
   const iframeContextMenuRef = useRef<
     Partial<Record<'left' | 'right', { doc: Document; handler: (e: MouseEvent) => void }>>
   >({});
-  // Read by the single window 'message' listener (registered once, below) to validate
-  // incoming postMessage events against the live pane's current nonce (and read the
-  // pane's current path/armed-for-pick state) without re-adding the listener every time
-  // a pane's mode/nonce/comments/armed-state changes.
-  const liveBridgeRef = useRef<Partial<Record<'left' | 'right', { nonce: string; path: string; armed: boolean }>>>(
-    {}
-  );
   // Holds the pending auto-dismiss timer id for the toast, so a new showToast() call
   // clears any still-pending timer from a previous call instead of letting an earlier
   // timer clear a message that a later call just set.
@@ -162,17 +145,53 @@ export function SplitView({
   const leftPath = viewState.path || viewState.left;
   const rightPath = viewState.right;
 
-  // Per-pane handshake token for the live-mode measurement agent. Regenerated whenever the
-  // pane switches to a new path or (re-)enters live mode, so each fresh agent instance gets
-  // its own nonce; the iframe is remounted (key change) in lockstep via viewMode+nonce below.
-  const leftNonce = useMemo(
-    () => (leftViewMode === 'live' && leftPath ? crypto.randomUUID() : ''),
-    [leftViewMode, leftPath]
-  );
-  const rightNonce = useMemo(
-    () => (rightViewMode === 'live' && rightPath ? crypto.randomUUID() : ''),
-    [rightViewMode, rightPath]
-  );
+  // Opens the comment composer for a "pick" reported by the left/right pane's live agent
+  // (bridge.armed already guaranteed true, and armed already cleared, by the hook).
+  const handleLeftPick = (result: LiveAgentPickResult) => {
+    setCommentDraft({
+      pane: 'left',
+      path: result.path,
+      line: 0,
+      top: result.top,
+      left: result.left,
+      body: '',
+      submitting: false,
+      error: null,
+      domAnchor: { selector: result.selector, snippet: result.snippet, snippetHash: result.snippetHash },
+    });
+  };
+  const handleRightPick = (result: LiveAgentPickResult) => {
+    setCommentDraft({
+      pane: 'right',
+      path: result.path,
+      line: 0,
+      top: result.top,
+      left: result.left,
+      body: '',
+      submitting: false,
+      error: null,
+      domAnchor: { selector: result.selector, snippet: result.snippet, snippetHash: result.snippetHash },
+    });
+  };
+
+  const leftBridge = useLiveAgentBridge({
+    path: leftPath,
+    viewMode: leftViewMode,
+    data: leftData,
+    comments: leftComments,
+    iframeRef: leftIframeRef,
+    containerRef: leftContentRef,
+    onPick: handleLeftPick,
+  });
+  const rightBridge = useLiveAgentBridge({
+    path: rightPath,
+    viewMode: rightViewMode,
+    data: rightData,
+    comments: rightComments,
+    iframeRef: rightIframeRef,
+    containerRef: rightContentRef,
+    onPick: handleRightPick,
+  });
 
   // Load each pane's persisted view mode when its path changes (new file = re-check
   // localStorage; a path with no saved preference falls back to 'static').
@@ -193,171 +212,6 @@ export function SplitView({
     } else {
       setRightViewMode(mode);
     }
-  };
-
-  // Keep the bridge ref in sync with each pane's current live nonce/path/armed-state so
-  // the message listener below (added once on mount) always validates and reads against
-  // the latest values without needing to re-add itself.
-  useEffect(() => {
-    liveBridgeRef.current.left =
-      leftViewMode === 'live' && leftNonce && leftData
-        ? { nonce: leftNonce, path: leftData.path, armed: leftArmed }
-        : undefined;
-  }, [leftViewMode, leftNonce, leftData, leftArmed]);
-
-  useEffect(() => {
-    liveBridgeRef.current.right =
-      rightViewMode === 'live' && rightNonce && rightData
-        ? { nonce: rightNonce, path: rightData.path, armed: rightArmed }
-        : undefined;
-  }, [rightViewMode, rightNonce, rightData, rightArmed]);
-
-  // Resets stale bridge state whenever a fresh agent instance is about to mount (new nonce
-  // = new iframe key), so a leftover "ready"/rects/armed from a previous pane/agent never
-  // leaks into the new one.
-  useEffect(() => {
-    setLeftAgentReady(false);
-    setLeftLiveRects({});
-    setLeftArmed(false);
-  }, [leftNonce]);
-
-  useEffect(() => {
-    setRightAgentReady(false);
-    setRightLiveRects({});
-    setRightArmed(false);
-  }, [rightNonce]);
-
-  // Basic structural validation for numeric fields coming from the agent over postMessage
-  // (untrusted-ish: same nonce/source as us, but still worth bounding before use in layout math).
-  const isFiniteNumber = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
-
-  // Single window-level listener for the whole SplitView lifetime: verifies
-  // event.source === the pane's iframe.contentWindow and the nonce matches before trusting
-  // the message. Non-matching messages (wrong source, wrong/missing nonce, foreign origin
-  // payload shape) are silently ignored rather than acted on.
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      const panes: Array<'left' | 'right'> = ['left', 'right'];
-      for (const pane of panes) {
-        const bridge = liveBridgeRef.current[pane];
-        if (!bridge) continue;
-        const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
-        if (!iframe || event.source !== iframe.contentWindow) continue;
-        const data = event.data;
-        if (!data || typeof data !== 'object' || data.mdmiel !== true || data.nonce !== bridge.nonce) continue;
-
-        if (data.type === 'ready') {
-          if (pane === 'left') setLeftAgentReady(true);
-          else setRightAgentReady(true);
-        } else if (data.type === 'rects' && Array.isArray(data.rects)) {
-          const map: Record<string, LiveRect> = {};
-          for (const entry of data.rects) {
-            if (!entry || typeof entry.id !== 'string') continue;
-            if (entry.found === true && entry.rect) {
-              const r = entry.rect;
-              if (!isFiniteNumber(r.top) || !isFiniteNumber(r.left) || !isFiniteNumber(r.width) || !isFiniteNumber(r.height)) {
-                continue;
-              }
-              map[entry.id] = {
-                found: true,
-                rect: { top: r.top, left: r.left, width: r.width, height: r.height },
-                visible: entry.visible === true,
-              };
-            } else {
-              map[entry.id] = { found: false, visible: false };
-            }
-          }
-          if (pane === 'left') setLeftLiveRects(map);
-          else setRightLiveRects(map);
-        } else if (data.type === 'pick' && bridge.armed) {
-          if (
-            typeof data.selector !== 'string' ||
-            typeof data.snippet !== 'string' ||
-            typeof data.snippetHash !== 'string' ||
-            !data.rect ||
-            !isFiniteNumber(data.rect.top) ||
-            !isFiniteNumber(data.rect.left)
-          ) {
-            continue;
-          }
-          const container = pane === 'left' ? leftContentRef.current : rightContentRef.current;
-          if (!container) continue;
-          const containerRect = container.getBoundingClientRect();
-          const iframeRect = iframe.getBoundingClientRect();
-          setCommentDraft({
-            pane,
-            path: bridge.path,
-            line: 0,
-            top: iframeRect.top - containerRect.top + data.rect.top,
-            left: iframeRect.left - containerRect.left + data.rect.left,
-            body: '',
-            submitting: false,
-            error: null,
-            domAnchor: { selector: data.selector, snippet: data.snippet, snippetHash: data.snippetHash },
-          });
-          if (pane === 'left') setLeftArmed(false);
-          else setRightArmed(false);
-        }
-      }
-    };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-  // Sends the pane's current DOM-anchored comments to its live agent for (re-)resolution.
-  // Called once the agent has signalled "ready" and again whenever the comment list changes
-  // (e.g. a new DOM comment was just created) while the pane stays in live mode.
-  const sendAnchorsToAgent = (pane: 'left' | 'right') => {
-    const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
-    const nonce = pane === 'left' ? leftNonce : rightNonce;
-    const comments = pane === 'left' ? leftComments : rightComments;
-    if (!iframe?.contentWindow || !nonce) return;
-    const anchors = comments
-      .filter((c) => c.anchor.type === 'dom' && !!c.anchor.selector)
-      .map((c) => ({
-        id: c.id,
-        selector: c.anchor.selector,
-        snippet: c.anchor.snippet,
-        snippetHash: c.anchor.snippetHash,
-      }));
-    iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'anchors', anchors }, '*');
-  };
-
-  useEffect(() => {
-    if (leftViewMode === 'live' && leftAgentReady) sendAnchorsToAgent('left');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leftViewMode, leftAgentReady, leftComments, leftNonce]);
-
-  useEffect(() => {
-    if (rightViewMode === 'live' && rightAgentReady) sendAnchorsToAgent('right');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rightViewMode, rightAgentReady, rightComments, rightNonce]);
-
-  // Tells the pane's agent whether "コメント追加" is armed, so the agent only sends a
-  // "pick" message for the next click while armed (instead of unconditionally on every
-  // click). The parent's bridge.armed check (message listener above) is kept as a
-  // defense-in-depth backstop even though the agent should no longer send pick when
-  // unarmed.
-  const sendCommentMode = (pane: 'left' | 'right', on: boolean) => {
-    const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
-    const nonce = pane === 'left' ? leftNonce : rightNonce;
-    if (!iframe?.contentWindow || !nonce) return;
-    iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'commentMode', on }, '*');
-  };
-
-  useEffect(() => {
-    if (leftViewMode === 'live' && leftAgentReady) sendCommentMode('left', leftArmed);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leftViewMode, leftAgentReady, leftArmed, leftNonce]);
-
-  useEffect(() => {
-    if (rightViewMode === 'live' && rightAgentReady) sendCommentMode('right', rightArmed);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rightViewMode, rightAgentReady, rightArmed, rightNonce]);
-
-  const handleToggleArmed = (pane: 'left' | 'right') => {
-    if (pane === 'left') setLeftArmed((v) => !v);
-    else setRightArmed((v) => !v);
   };
 
   const showToast = (message: string) => {
@@ -548,17 +402,16 @@ export function SplitView({
     if (data.type === 'html' && mode === 'live' && comment.anchor.type === 'dom') {
       const selector = comment.anchor.selector;
       if (!selector) return;
-      const nonce = pane === 'left' ? leftNonce : rightNonce;
-      const ready = pane === 'left' ? leftAgentReady : rightAgentReady;
+      const bridge = pane === 'left' ? leftBridge : rightBridge;
       const iframe = pane === 'left' ? leftIframeRef.current : rightIframeRef.current;
-      if (!iframe?.contentWindow || !nonce || !ready) return; // Waits for the agent; effect re-runs on ready.
+      if (!iframe?.contentWindow || !bridge.nonce || !bridge.agentReady) return; // Waits for the agent; effect re-runs on ready.
       // Force a fresh anchor resolution right before scrolling: the pane may have been
       // sitting on a different SPA screen since its last resolve, and while the agent's
       // own MutationObserver should already keep liveRects current, re-requesting here
       // is a cheap defensive measure so a followed sticky-note link never scrolls to (or
       // flashes) a stale/incorrect position.
-      sendAnchorsToAgent(pane);
-      iframe.contentWindow.postMessage({ mdmiel: true, nonce, type: 'scrollTo', selector }, '*');
+      bridge.sendAnchors();
+      bridge.sendScrollTo(selector);
       setFlashCommentId(focusCommentId);
       focusHandledIdRef.current = focusCommentId;
       onFocusHandled?.();
@@ -585,10 +438,10 @@ export function SplitView({
     rightData,
     leftViewMode,
     rightViewMode,
-    leftAgentReady,
-    rightAgentReady,
-    leftNonce,
-    rightNonce,
+    leftBridge.agentReady,
+    rightBridge.agentReady,
+    leftBridge.nonce,
+    rightBridge.nonce,
   ]);
 
   // Auto-dismisses the flash-highlight exactly 3s after it was last set, independent of the
@@ -933,11 +786,11 @@ export function SplitView({
             )}
             {leftData?.type === 'html' && leftViewMode === 'live' && (
               <button
-                className={`pane-add-comment-btn ${leftArmed ? 'active' : ''}`}
-                onClick={() => handleToggleArmed('left')}
-                title={leftArmed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
+                className={`pane-add-comment-btn ${leftBridge.armed ? 'active' : ''}`}
+                onClick={() => leftBridge.toggleArmed()}
+                title={leftBridge.armed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
               >
-                {leftArmed ? 'クリックして配置...' : 'コメント追加'}
+                {leftBridge.armed ? 'クリックして配置...' : 'コメント追加'}
               </button>
             )}
             {rightPath && (
@@ -966,13 +819,13 @@ export function SplitView({
               onLoad={() => handleIframeLoad('left', leftIframeRef)}
             />
           )}
-          {!leftError && leftData?.type === 'html' && leftViewMode === 'live' && leftNonce && (
+          {!leftError && leftData?.type === 'html' && leftViewMode === 'live' && leftBridge.nonce && (
             <iframe
-              key={`live-${leftData.path}-${leftNonce}`}
+              key={`live-${leftData.path}-${leftBridge.nonce}`}
               ref={leftIframeRef}
               className="preview-iframe"
               sandbox="allow-scripts"
-              srcDoc={renderHtmlLive(leftData.content, leftData.path, leftNonce)}
+              srcDoc={renderHtmlLive(leftData.content, leftData.path, leftBridge.nonce)}
             />
           )}
           {!leftError && leftData && (
@@ -983,7 +836,7 @@ export function SplitView({
               containerRef={leftContentRef}
               iframeRef={leftIframeRef}
               viewMode={leftData.type === 'html' ? leftViewMode : 'static'}
-              liveRects={leftLiveRects}
+              liveRects={leftBridge.liveRects}
               onCopyLink={showToast}
               flashCommentId={flashCommentId}
               onChanged={() => onCommentsChanged?.()}
@@ -1006,11 +859,11 @@ export function SplitView({
               )}
               {rightData?.type === 'html' && rightViewMode === 'live' && (
                 <button
-                  className={`pane-add-comment-btn ${rightArmed ? 'active' : ''}`}
-                  onClick={() => handleToggleArmed('right')}
-                  title={rightArmed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
+                  className={`pane-add-comment-btn ${rightBridge.armed ? 'active' : ''}`}
+                  onClick={() => rightBridge.toggleArmed()}
+                  title={rightBridge.armed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
                 >
-                  {rightArmed ? 'クリックして配置...' : 'コメント追加'}
+                  {rightBridge.armed ? 'クリックして配置...' : 'コメント追加'}
                 </button>
               )}
               <button className="close-btn" onClick={() => onClosePane('right')} title="右ペインを閉じる">
@@ -1037,13 +890,13 @@ export function SplitView({
                 onLoad={() => handleIframeLoad('right', rightIframeRef)}
               />
             )}
-            {!rightError && rightData?.type === 'html' && rightViewMode === 'live' && rightNonce && (
+            {!rightError && rightData?.type === 'html' && rightViewMode === 'live' && rightBridge.nonce && (
               <iframe
-                key={`live-${rightData.path}-${rightNonce}`}
+                key={`live-${rightData.path}-${rightBridge.nonce}`}
                 ref={rightIframeRef}
                 className="preview-iframe"
                 sandbox="allow-scripts"
-                srcDoc={renderHtmlLive(rightData.content, rightData.path, rightNonce)}
+                srcDoc={renderHtmlLive(rightData.content, rightData.path, rightBridge.nonce)}
               />
             )}
             {!rightError && rightData && (
@@ -1054,7 +907,7 @@ export function SplitView({
                 containerRef={rightContentRef}
                 iframeRef={rightIframeRef}
                 viewMode={rightData.type === 'html' ? rightViewMode : 'static'}
-                liveRects={rightLiveRects}
+                liveRects={rightBridge.liveRects}
                 onCopyLink={showToast}
                 flashCommentId={flashCommentId}
                 onChanged={() => onCommentsChanged?.()}
