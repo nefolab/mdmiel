@@ -4,6 +4,7 @@ import { SplitView, PaneContentInfo } from './components/SplitView';
 import { CommentSidebar, CommentSidebarPaneInfo } from './components/CommentSidebar';
 import { parseHash, generateHash, parseCommentRoute, ViewState } from './lib/anchor';
 import { Comment } from './lib/comments';
+import { collectUnresolvedComments, UnresolvedIdsByPane } from './lib/stickyLayout';
 import { listComments, getComment } from './lib/commentsApi';
 import { Theme, getInitialTheme, applyTheme } from './lib/theme';
 import { setViewMode } from './lib/viewMode';
@@ -18,6 +19,15 @@ export default function App() {
     right?: PaneContentInfo;
   }>({});
   const [commentsByPane, setCommentsByPane] = useState<{ left: Comment[]; right: Comment[] }>({
+    left: [],
+    right: [],
+  });
+  // Per-pane unresolved (orphaned + missing) comment ids, reported by each pane's
+  // StickyNoteLayer via SplitView's onUnresolvedChange. Stale ids left behind by a pane
+  // that closed or switched files are harmless: collectUnresolvedComments filters ids
+  // against commentsByPane, so they simply resolve to nothing once that pane's comment
+  // list has moved on.
+  const [unresolvedIdsByPane, setUnresolvedIdsByPane] = useState<UnresolvedIdsByPane>({
     left: [],
     right: [],
   });
@@ -139,6 +149,10 @@ export default function App() {
     setPaneContents((prev) => ({ ...prev, [pane]: data ?? undefined }));
   };
 
+  const handleUnresolvedChange = (pane: 'left' | 'right', commentIds: string[]) => {
+    setUnresolvedIdsByPane((prev) => ({ ...prev, [pane]: commentIds }));
+  };
+
   const handleCommentAdded = () => {
     reloadComments();
   };
@@ -193,6 +207,9 @@ export default function App() {
     commentPanes.push({ pane: 'right', path: rightPath, content: paneContents.right.content });
   }
 
+  const totalCommentCount = commentsByPane.left.length + commentsByPane.right.length;
+  const unresolvedCount = collectUnresolvedComments(commentsByPane, unresolvedIdsByPane).length;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <header className="app-header">
@@ -225,7 +242,17 @@ export default function App() {
             onClick={() => setCommentsPanelOpen((v) => !v)}
             title="コメントパネルの表示切替"
           >
-            💬 コメント
+            <span className="comments-toggle-label">💬 コメント</span>
+            <span className="comments-toggle-count">{totalCommentCount}</span>
+            {unresolvedCount > 0 && (
+              <span
+                className="comments-toggle-unresolved"
+                title={`未解決 ( orphaned ) のコメントが${unresolvedCount}件あります`}
+              >
+                <span className="comments-toggle-unresolved-dot" />
+                {unresolvedCount}
+              </span>
+            )}
           </button>
         </div>
       </header>
@@ -245,6 +272,7 @@ export default function App() {
           onCommentsChanged={reloadComments}
           focusCommentId={focusCommentId ?? undefined}
           onFocusHandled={() => setFocusCommentId(null)}
+          onUnresolvedChange={handleUnresolvedChange}
         />
         {commentsPanelOpen && leftPath && (
           <CommentSidebar
@@ -252,6 +280,7 @@ export default function App() {
             commentsByPane={commentsByPane}
             onJumpToLine={handleJumpToLine}
             onChanged={reloadComments}
+            unresolvedIdsByPane={unresolvedIdsByPane}
           />
         )}
       </div>

@@ -1,4 +1,4 @@
-import React, { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Comment } from '../lib/comments';
 import {
   resolvePlacements,
@@ -52,6 +52,13 @@ export interface StickyNoteLayerProps {
   /** Comment id to briefly flash-highlight (e.g. after following a /#/comment/<id> link). */
   flashCommentId?: string | null;
   onChanged: () => void;
+  /**
+   * Reports this pane's current unresolved (orphaned + missing) comment ids, called
+   * whenever the computed set changes. There is no pane-level display for these anymore
+   * (see CommentSidebar's 未解決 section) — this is purely a notification channel for the
+   * parent to aggregate across panes.
+   */
+  onUnresolvedChange?: (commentIds: string[]) => void;
 }
 
 interface NotePosition {
@@ -70,6 +77,7 @@ export function StickyNoteLayer({
   onCopyLink,
   flashCommentId,
   onChanged,
+  onUnresolvedChange,
 }: StickyNoteLayerProps) {
   const allPlacements = useMemo(
     () => resolvePlacements(comments, content),
@@ -248,9 +256,34 @@ export function StickyNoteLayer({
     () => splitOrphaned(allPlacements, (p) => !missingSet.has(p.comment.id)),
     [allPlacements, missingSet]
   );
-  // Both truly-orphaned notes and notes whose anchor element is absent go to
-  // the pane's unresolved zone instead of vanishing silently.
-  const unresolved = combineUnresolved(orphaned, missing);
+  // Both truly-orphaned notes and notes whose anchor element is absent are no longer
+  // shown in-pane (see working/HANDOFF.md L2 決定: 別画面のコメントがorphanedなのはライブ
+  // モードでは正常状態で、常時表示はノイズになる) — they're reported to the parent instead
+  // (below) for display in CommentSidebar's 未解決 section. Memoized (not just inline) so
+  // its reference — and unresolvedIds/the effect below that depends on it — stay stable
+  // across renders that don't actually change the orphaned/missing sets; without this the
+  // effect would fire, and notify the parent, on every render.
+  const unresolved = useMemo(() => combineUnresolved(orphaned, missing), [orphaned, missing]);
+  const unresolvedIds = useMemo(() => unresolved.map((p) => p.comment.id), [unresolved]);
+  // Last ids array actually delivered to the parent, so a measure() pass that leaves the
+  // unresolved set content-identical (e.g. missingSet is a freshly-allocated Set on every
+  // remeasure even when its contents didn't change) doesn't re-notify the parent — that
+  // would otherwise call setState upstream (App's unresolvedByPane) on every scroll/resize.
+  const lastNotifiedIdsRef = useRef<string[]>([]);
+
+  // onUnresolvedChange is intentionally omitted from the deps array: it's typically a
+  // fresh inline closure on every parent render (see the analogous onPaneContentChange
+  // effects in SplitView), so depending on its identity would re-notify the parent on
+  // every unrelated re-render instead of only when the unresolved set itself changes.
+  useEffect(() => {
+    const prev = lastNotifiedIdsRef.current;
+    const unchanged =
+      prev.length === unresolvedIds.length && prev.every((id, i) => id === unresolvedIds[i]);
+    if (unchanged) return;
+    lastNotifiedIdsRef.current = unresolvedIds;
+    onUnresolvedChange?.(unresolvedIds);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unresolvedIds]);
 
   return (
     <>
@@ -272,30 +305,6 @@ export function StickyNoteLayer({
           />
         );
       })}
-
-      {unresolved.length > 0 && (
-        <div className="orphan-zone">
-          <div className="orphan-zone-label">
-            <span className="orphan-zone-label-dot" />
-            未解決ゾーン ( orphaned )
-          </div>
-          <div className="orphan-zone-list">
-            {unresolved.map((p) => (
-              <StickyNote
-                key={p.comment.id}
-                comment={p.comment}
-                line={p.line}
-                orphaned
-                expanded={expandedId === p.comment.id}
-                onToggle={() => toggleExpand(p.comment.id)}
-                onChanged={onChanged}
-                onCopyLink={onCopyLink}
-                flashing={flashCommentId === p.comment.id}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </>
   );
 }
@@ -304,7 +313,6 @@ interface StickyNoteProps {
   comment: Comment;
   line: number;
   floating?: boolean;
-  orphaned?: boolean;
   style?: React.CSSProperties;
   expanded: boolean;
   onToggle: () => void;
@@ -324,7 +332,6 @@ function StickyNote({
   comment,
   line,
   floating,
-  orphaned,
   style,
   expanded,
   onToggle,
@@ -448,7 +455,6 @@ function StickyNote({
     'sticky-note',
     floating ? 'sticky-note-floating' : '',
     comment.resolved ? 'sticky-note-resolved' : '',
-    orphaned ? 'sticky-note-orphaned' : '',
     expanded ? 'sticky-note-expanded' : '',
     isDragging ? 'sticky-note-dragging' : '',
     flashing ? 'sticky-note-flash' : '',
@@ -472,7 +478,6 @@ function StickyNote({
       >
         <span className="sticky-note-dot" />
         <span className="sticky-note-author">{comment.author}</span>
-        {orphaned && <span className="badge badge-orphaned">未解決</span>}
         {comment.resolved && <span className="sticky-note-badge-resolved">解決済み</span>}
         <span className="sticky-note-line">{comment.anchor.type === 'dom' ? 'DOM' : `L${line}`}</span>
         <button

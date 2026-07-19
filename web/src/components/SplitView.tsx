@@ -38,6 +38,12 @@ export interface SplitViewProps {
    */
   focusCommentId?: string;
   onFocusHandled?: () => void;
+  /**
+   * Called whenever a pane's unresolved (orphaned + missing) comment-id set changes, as
+   * reported by that pane's StickyNoteLayer. Lifted so App can aggregate both panes for
+   * CommentSidebar's 未解決 section and the header's unresolved-count badge.
+   */
+  onUnresolvedChange?: (pane: 'left' | 'right', commentIds: string[]) => void;
 }
 
 interface MenuState {
@@ -104,6 +110,7 @@ export function SplitView({
   onCommentsChanged,
   focusCommentId,
   onFocusHandled,
+  onUnresolvedChange,
 }: SplitViewProps) {
   const [leftData, setLeftData] = useState<PaneData | null>(null);
   const [rightData, setRightData] = useState<PaneData | null>(null);
@@ -840,6 +847,7 @@ export function SplitView({
               onCopyLink={showToast}
               flashCommentId={flashCommentId}
               onChanged={() => onCommentsChanged?.()}
+              onUnresolvedChange={(ids) => onUnresolvedChange?.('left', ids)}
             />
           )}
         </div>
@@ -911,6 +919,7 @@ export function SplitView({
                 onCopyLink={showToast}
                 flashCommentId={flashCommentId}
                 onChanged={() => onCommentsChanged?.()}
+                onUnresolvedChange={(ids) => onUnresolvedChange?.('right', ids)}
               />
             )}
           </div>
