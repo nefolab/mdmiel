@@ -282,3 +282,199 @@ describe('additional hardening: parent-message origin pinning when ancestorOrigi
     expect(script).toContain('pinnedOrigin = event.origin;');
   });
 });
+
+/**
+ * L2 (anchor hardening): builds a callable resolveOne(anchor) that also splices in
+ * deriveTagFromSelector, so fallback-scan tag validation (requirement 3) can be exercised.
+ * Same brace-counting extraction approach as buildResolveOne above; kept as a separate
+ * helper rather than editing buildResolveOne, since existing tests using buildResolveOne
+ * must not change.
+ */
+function buildResolveOneL2(
+  script: string
+): (anchor: { selector?: string; snippet: string; snippetHash: string }) => Element | null {
+  const constMatch = script.match(/var MAX_TEXT_HASH_SCAN = \d+;/);
+  if (!constMatch) throw new Error('MAX_TEXT_HASH_SCAN declaration not found in agent script');
+  const deriveTagSrc = extractFunctionSource(script, 'deriveTagFromSelector');
+  const fnv1a = extractFunctionSource(script, 'fnv1aHash');
+  const extractTextSrc = extractFunctionSource(script, 'extractText');
+  const resolveOneSrc = extractFunctionSource(script, 'resolveOne');
+  const combined = [constMatch[0], deriveTagSrc, fnv1a, extractTextSrc, resolveOneSrc, 'return resolveOne;'].join(
+    '\n'
+  );
+  // eslint-disable-next-line no-new-func
+  return new Function(combined)();
+}
+
+describe('L2 requirement 1: empty-snippet anchors never fall back to the text-hash scan', () => {
+  it('does not snap to an unrelated empty-text element when the selector misses (bug repro: skeleton-style anchor)', () => {
+    const script = renderAgentScript('n');
+    const resolveOne = buildResolveOneL2(script);
+
+    document.body.innerHTML = '';
+    // An unrelated empty-text element elsewhere in the DOM. With the old (buggy) fallback,
+    // this would be picked up by the full-tree text-hash scan since "" hashes identically
+    // to the anchor's snippetHash (811c9dc5) regardless of which element it belongs to.
+    const decoy = document.createElement('div');
+    decoy.id = 'decoy';
+    document.body.appendChild(decoy);
+
+    const found = resolveOne({ selector: '#missing-skeleton', snippet: '', snippetHash: snippetHash('') });
+    expect(found).toBeNull();
+  });
+
+  it('trusts a selector match directly for an empty snippet, without requiring a hash re-check', () => {
+    const script = renderAgentScript('n');
+    const resolveOne = buildResolveOneL2(script);
+
+    document.body.innerHTML = '<div id="skeleton"></div>';
+    const el = document.getElementById('skeleton')!;
+
+    const found = resolveOne({ selector: '#skeleton', snippet: '', snippetHash: snippetHash('') });
+    expect(found).toBe(el);
+  });
+
+  it('still runs the text-hash fallback scan for a non-empty snippet (regression guard: requirement 1 must not over-apply)', () => {
+    const script = renderAgentScript('n');
+    const resolveOne = buildResolveOneL2(script);
+
+    document.body.innerHTML = '';
+    // A filler sibling keeps body/html's aggregate textContent from accidentally matching
+    // `target`'s own text (which would make the assertion pass for the wrong reason).
+    const filler = document.createElement('p');
+    filler.textContent = 'filler';
+    document.body.appendChild(filler);
+    const target = document.createElement('div');
+    target.textContent = 'target-text';
+    document.body.appendChild(target);
+
+    const found = resolveOne({ selector: '#missing', snippet: 'target-text', snippetHash: snippetHash('target-text') });
+    expect(found).toBe(target);
+  });
+});
+
+describe('L2 requirement 2: isElementRenderable rejects zero-size or hidden resolved elements', () => {
+  function extractIsElementRenderable(script: string) {
+    return extractFunction(script, 'isElementRenderable') as (
+      el: Element,
+      r: { width: number; height: number }
+    ) => boolean;
+  }
+
+  it('rejects a rect with width and height both 0', () => {
+    const script = renderAgentScript('n');
+    const isElementRenderable = extractIsElementRenderable(script);
+    document.body.innerHTML = '<div id="target"></div>';
+    const el = document.getElementById('target')!;
+    expect(isElementRenderable(el, { width: 0, height: 0 })).toBe(false);
+  });
+
+  it('rejects an element with display:none regardless of rect size', () => {
+    const script = renderAgentScript('n');
+    const isElementRenderable = extractIsElementRenderable(script);
+    document.body.innerHTML = '<div id="target" style="display:none"></div>';
+    const el = document.getElementById('target')!;
+    expect(isElementRenderable(el, { width: 100, height: 40 })).toBe(false);
+  });
+
+  it('rejects an element with visibility:hidden regardless of rect size', () => {
+    const script = renderAgentScript('n');
+    const isElementRenderable = extractIsElementRenderable(script);
+    document.body.innerHTML = '<div id="target" style="visibility:hidden"></div>';
+    const el = document.getElementById('target')!;
+    expect(isElementRenderable(el, { width: 100, height: 40 })).toBe(false);
+  });
+
+  it('accepts a normal, sized, visible element even when its rect is off-viewport (that is a separate visible:false concern, not found:false)', () => {
+    const script = renderAgentScript('n');
+    const isElementRenderable = extractIsElementRenderable(script);
+    document.body.innerHTML = '<div id="target"></div>';
+    const el = document.getElementById('target')!;
+    expect(isElementRenderable(el, { width: 100, height: 40, top: -9999, left: -9999 } as never)).toBe(true);
+  });
+
+  it('sendRectsNow gates found:true on isElementRenderable(el, r) before reporting rect/visible', () => {
+    const script = renderAgentScript('n');
+    expect(script).toContain('if (!isElementRenderable(el, r)) {');
+    expect(script).toContain('rects.push({ id: a.id, found: false });\n        continue;\n      }\n      rects.push({');
+  });
+});
+
+describe('L2 requirement 3: text-hash fallback candidates are validated against the selector\'s trailing tag name', () => {
+  it('skips a same-hash candidate of the wrong tag and returns the one whose tag matches the selector', () => {
+    const script = renderAgentScript('n');
+    const resolveOne = buildResolveOneL2(script);
+
+    document.body.innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = 'shared-text';
+    document.body.appendChild(span);
+    const div = document.createElement('div');
+    div.textContent = 'shared-text';
+    document.body.appendChild(div);
+
+    // Selector itself misses (querySelector finds nothing), forcing the fallback scan;
+    // its trailing segment "div:nth-of-type(9)" derives an expected tag of "div".
+    const found = resolveOne({
+      selector: 'body > div:nth-of-type(9)',
+      snippet: 'shared-text',
+      snippetHash: snippetHash('shared-text'),
+    });
+    expect(found).toBe(div);
+    expect(found).not.toBe(span);
+  });
+
+  it('returns null when every same-hash candidate has the wrong tag', () => {
+    const script = renderAgentScript('n');
+    const resolveOne = buildResolveOneL2(script);
+
+    document.body.innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = 'only-span-text';
+    document.body.appendChild(span);
+
+    const found = resolveOne({
+      selector: 'body > div:nth-of-type(9)',
+      snippet: 'only-span-text',
+      snippetHash: snippetHash('only-span-text'),
+    });
+    expect(found).toBeNull();
+  });
+
+  it('skips tag validation when the selector has no derivable trailing tag (id/data-testid form)', () => {
+    const script = renderAgentScript('n');
+    const resolveOne = buildResolveOneL2(script);
+
+    document.body.innerHTML = '';
+    // A filler sibling keeps body/html's aggregate textContent from accidentally matching
+    // `span`'s own text (which would make the assertion pass for the wrong reason).
+    const filler = document.createElement('p');
+    filler.textContent = 'filler';
+    document.body.appendChild(filler);
+    const span = document.createElement('span');
+    span.textContent = 'id-selector-text';
+    document.body.appendChild(span);
+
+    const found = resolveOne({
+      selector: '#does-not-exist',
+      snippet: 'id-selector-text',
+      snippetHash: snippetHash('id-selector-text'),
+    });
+    expect(found).toBe(span);
+  });
+});
+
+describe('L2: deriveTagFromSelector', () => {
+  it('derives the trailing tag from a nth-of-type path, and returns null for id/data-testid selectors', () => {
+    const script = renderAgentScript('n');
+    const deriveTagFromSelector = extractFunction(script, 'deriveTagFromSelector') as (
+      selector: string
+    ) => string | null;
+
+    expect(deriveTagFromSelector('html > body:nth-of-type(1) > div:nth-of-type(2)')).toBe('div');
+    expect(deriveTagFromSelector('span:nth-of-type(3)')).toBe('span');
+    expect(deriveTagFromSelector('#some-id')).toBeNull();
+    expect(deriveTagFromSelector('[data-testid="x"]')).toBeNull();
+    expect(deriveTagFromSelector('')).toBeNull();
+  });
+});

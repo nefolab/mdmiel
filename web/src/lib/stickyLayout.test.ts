@@ -8,6 +8,7 @@ import {
   partitionStackable,
   combineUnresolved,
   buildLiveRawEntries,
+  collectUnresolvedComments,
   ResolvedPlacement,
 } from './stickyLayout';
 import { Comment, computeSnippet, snippetHash } from './comments';
@@ -321,6 +322,46 @@ describe('buildLiveRawEntries', () => {
     // SPA navigated back and the element re-resolved.
     const step3 = buildLiveRawEntries(candidates, { a: { found: true, rect: { top: 8, left: 0, width: 1, height: 1 }, visible: true } }, 0);
     expect(step3[0]).toEqual({ id: 'a', desiredTop: 8, present: true, visible: true });
+  });
+});
+
+describe('collectUnresolvedComments', () => {
+  it('resolves left and right ids into full Comment objects, left before right', () => {
+    const l1 = makeComment('l1', 1, 'a');
+    const l2 = makeComment('l2', 2, 'b');
+    const r1 = makeComment('r1', 3, 'c');
+    const commentsByPane = { left: [l1, l2], right: [r1] };
+
+    const result = collectUnresolvedComments(commentsByPane, { left: ['l2'], right: ['r1'] });
+
+    expect(result).toEqual([
+      { pane: 'left', comment: l2 },
+      { pane: 'right', comment: r1 },
+    ]);
+  });
+
+  it('preserves the order ids were reported in, per pane', () => {
+    const l1 = makeComment('l1', 1, 'a');
+    const l2 = makeComment('l2', 2, 'b');
+    const commentsByPane = { left: [l1, l2], right: [] };
+
+    const result = collectUnresolvedComments(commentsByPane, { left: ['l2', 'l1'], right: [] });
+
+    expect(result.map((r) => r.comment.id)).toEqual(['l2', 'l1']);
+  });
+
+  it('silently skips an id with no matching comment in that pane', () => {
+    const l1 = makeComment('l1', 1, 'a');
+    const commentsByPane = { left: [l1], right: [] };
+
+    const result = collectUnresolvedComments(commentsByPane, { left: ['l1', 'ghost'], right: [] });
+
+    expect(result.map((r) => r.comment.id)).toEqual(['l1']);
+  });
+
+  it('returns an empty array when both id lists are empty', () => {
+    const commentsByPane = { left: [makeComment('l1', 1, 'a')], right: [makeComment('r1', 1, 'b')] };
+    expect(collectUnresolvedComments(commentsByPane, { left: [], right: [] })).toEqual([]);
   });
 });
 

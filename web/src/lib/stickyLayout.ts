@@ -219,6 +219,43 @@ export function partitionStackable<T>(
   return { stackable, offset };
 }
 
+export interface UnresolvedIdsByPane {
+  left: string[];
+  right: string[];
+}
+
+export interface UnresolvedCommentEntry {
+  pane: 'left' | 'right';
+  comment: Comment;
+}
+
+/**
+ * Resolves the per-pane unresolved-comment-id sets reported by each pane's
+ * StickyNoteLayer (via its onUnresolvedChange callback) into full Comment
+ * objects, for display in CommentSidebar's 未解決 section and for the
+ * header's unresolved-count badge (single source of truth for both).
+ *
+ * An id with no matching comment in its pane's list is silently skipped
+ * (e.g. the comment was deleted in the moment between being reported
+ * unresolved and this running again) rather than throwing. Left-pane
+ * entries precede right-pane entries; within a pane, order follows the
+ * reported id order (orphaned before missing — see combineUnresolved).
+ */
+export function collectUnresolvedComments(
+  commentsByPane: { left: Comment[]; right: Comment[] },
+  unresolvedIdsByPane: UnresolvedIdsByPane
+): UnresolvedCommentEntry[] {
+  const result: UnresolvedCommentEntry[] = [];
+  (['left', 'right'] as const).forEach((pane) => {
+    const byId = new Map(commentsByPane[pane].map((c) => [c.id, c] as const));
+    for (const id of unresolvedIdsByPane[pane]) {
+      const comment = byId.get(id);
+      if (comment) result.push({ pane, comment });
+    }
+  });
+  return result;
+}
+
 export interface NoteOffset {
   dx: number;
   dy: number;

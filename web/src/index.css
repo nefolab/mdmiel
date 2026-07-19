@@ -158,6 +158,9 @@ body {
 }
 
 .comments-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: transparent;
   border: 1px solid var(--color-header-border);
   color: var(--color-header-text);
@@ -179,6 +182,31 @@ body {
   border-color: var(--color-accent);
   color: var(--color-text);
   opacity: 1;
+}
+
+.comments-toggle-count {
+  font-size: 11px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+/* 未解決件数インジケータ: 発見性担保のため、パネルを開かなくても未解決が
+   あることが分かるようヘッダーのコメントボタンに小さく併記する ( L2 ) */
+.comments-toggle-unresolved {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-danger);
+}
+
+.comments-toggle-unresolved-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: var(--color-danger);
+  flex: none;
 }
 
 /* Layout */
@@ -903,11 +931,6 @@ body {
   box-shadow: 0 10px 28px -8px rgba(0, 0, 0, 0.45);
 }
 
-.sticky-note-orphaned {
-  border-style: dashed;
-  border-color: var(--color-accent);
-}
-
 .sticky-note-dragging {
   user-select: none;
 }
@@ -919,7 +942,7 @@ body {
 }
 
 /* Header: author dot + name + badges + line number. Doubles as the drag
-   handle for floating notes; orphan-zone notes render it but aren't draggable. */
+   handle (floating notes only). */
 .sticky-note-header {
   display: flex;
   align-items: center;
@@ -1082,29 +1105,20 @@ body {
   cursor: default;
 }
 
-/* Orphaned ( unresolvable ) notes zone: a bar pinned to the pane's bottom
-   edge ( position: absolute within the pane-content viewport, so it stays
-   put whether the markdown body scrolls internally or an html iframe fills
-   the pane — see docs/design/mock.html "未解決ゾーン" ). */
-.orphan-zone {
-  position: absolute;
-  left: 14px;
-  right: 14px;
-  bottom: 0;
-  max-height: 40%;
+/* 未解決 ( orphaned ) section: appended at the bottom of CommentSidebar's list
+   ( in normal document flow, scrolling together with the rest of the panel — not
+   pinned to the pane like the old orphan-zone bar was; see L2 決定 in App.tsx's
+   handleUnresolvedChange comment for why the pane-pinned zone was removed ). */
+.comment-unresolved-section {
   display: flex;
   flex-direction: column;
-  background-color: var(--color-panel2);
-  border: 1px solid var(--color-border);
+  gap: 8px;
+  margin-top: 4px;
+  padding-top: 12px;
   border-top: 2px solid var(--color-accent);
-  border-radius: 10px 10px 0 0;
-  box-shadow: 0 -8px 20px -12px rgba(0, 0, 0, 0.3);
-  padding: 12px 14px;
-  z-index: 70;
 }
 
-.orphan-zone-label {
-  flex: none;
+.comment-unresolved-title {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1113,22 +1127,36 @@ body {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--color-accent);
-  margin-bottom: 8px;
 }
 
-.orphan-zone-label-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background-color: var(--color-accent);
-  flex: none;
+.comment-unresolved-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--color-accent);
+  background-color: var(--color-accent-soft);
+  border-radius: 999px;
+  padding: 1px 6px;
 }
 
-.orphan-zone-list {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.comment-unresolved-desc {
+  font-size: 11px;
+  color: var(--color-muted);
+  margin-bottom: 2px;
+}
+
+.comment-item-static {
+  cursor: default;
+}
+
+.comment-item-static:hover {
+  border-color: var(--color-border);
+}
+
+.comment-item-pane-tag {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-muted);
+  background-color: var(--color-chip-bg);
+  border-radius: 4px;
+  padding: 1px 5px;
 }

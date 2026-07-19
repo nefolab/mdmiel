@@ -133,6 +133,20 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   // しうるため、上限を超えたら見つからなかった ( found:false ) ものとして打ち切る。
   var MAX_TEXT_HASH_SCAN = 5000;
 
+  // セレクタ文字列の末尾セグメント (" > "区切りの最後) からタグ名を導出する。buildSelector()が
+  // 生成する形式 (id/data-testidセレクタ単体、または "tag:nth-of-type(n)" のパス) のうち、
+  // 末尾が "tag" または "tag:nth-of-type(n)" のときだけ導出できる。id/data-testidセレクタは
+  // "#" / "[" で始まるため導出できず null を返し、呼び出し側は検証をスキップする。
+  function deriveTagFromSelector(selector) {
+    if (!selector) return null;
+    var segments = selector.split(">");
+    var last = segments[segments.length - 1];
+    if (!last) return null;
+    last = last.trim();
+    var m = /^([a-zA-Z][a-zA-Z0-9-]*)/.exec(last);
+    return m ? m[1].toLowerCase() : null;
+  }
+
   function resolveOne(anchor) {
     var el = null;
     if (anchor.selector) {
@@ -142,15 +156,29 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
         el = null;
       }
     }
+    // 空snippet (正規化後) のアンカーはテキストハッシュの全要素走査フォールバックを行わない。
+    // テキストを持たない要素は「同じ空ハッシュを持つ最初の要素」に誤スナップしやすく、その
+    // 要素が不可視だと見つかったのに表示されない付箋を生む (実バグ再現済み: snippet="" /
+    // snippetHash=811c9dc5のコメントがスケルトン要素ではなく別の不可視要素に誤スナップし、
+    // found:true かつ visible:false のまま orphaned にも落ちなかった)。セレクタが一致するか
+    // 否かだけで判定し ( ハッシュ照合もフォールバックも行わない )、一致しなければfound:falseとする。
+    if (anchor.snippet === "") {
+      return el;
+    }
     if (el && fnv1aHash(extractText(el)) === anchor.snippetHash) {
       return el;
     }
     // セレクタ不一致/テキスト不一致: 全要素走査でテキストハッシュが一致する最初の要素を探す。
+    // セレクタがあり末尾タグ名が導出できる場合は、候補要素のタグ名が一致しないものは採用しない
+    // ( 別種の要素への誤スナップ防止 )。導出できないセレクタ形式では検証をスキップする。
+    var expectedTag = anchor.selector ? deriveTagFromSelector(anchor.selector) : null;
     var all = document.querySelectorAll("*");
     var scanLimit = Math.min(all.length, MAX_TEXT_HASH_SCAN);
     for (var i = 0; i < scanLimit; i++) {
-      if (fnv1aHash(extractText(all[i])) === anchor.snippetHash) {
-        return all[i];
+      var candidate = all[i];
+      if (fnv1aHash(extractText(candidate)) === anchor.snippetHash) {
+        if (expectedTag && candidate.tagName.toLowerCase() !== expectedTag) continue;
+        return candidate;
       }
     }
     return null;
@@ -171,6 +199,16 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
     return r.bottom > 0 && r.top < vh && r.right > 0 && r.left < vw;
   }
 
+  // 解決済み要素が「レンダリングされている」とみなせるか。サイズ0 (width/height両方0)、
+  // またはdisplay:none/visibility:hiddenのいずれかならレンダリングされていないとみなし
+  // found:falseにする。ビューポート外にスクロールしているだけの要素の判定はisRectVisible()
+  // 側 (found:true + visible:false) に委ねており、ここでは対象にしない。
+  function isElementRenderable(el, r) {
+    if (r.width === 0 && r.height === 0) return false;
+    var style = window.getComputedStyle(el);
+    return style.display !== "none" && style.visibility !== "hidden";
+  }
+
   function sendRectsNow() {
     var rects = [];
     for (var i = 0; i < anchors.length; i++) {
@@ -181,6 +219,10 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
         continue;
       }
       var r = el.getBoundingClientRect();
+      if (!isElementRenderable(el, r)) {
+        rects.push({ id: a.id, found: false });
+        continue;
+      }
       rects.push({
         id: a.id,
         found: true,
@@ -224,6 +266,82 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   // bridge.armedチェックは防御として残るが、agent側でも不要な送信自体を止める )。
   var commentModeOn = false;
 
+  // --- コメントモードhoverハイライト (L2) --------------------------------
+  // commentMode ON中、hover中の要素にoutlineを表示する。書き換えるのはoutline系の3プロパティ
+  // のみに限定する ( インラインstyle全体の退避・復元だと、モック側JSが同時刻に書き込んだ
+  // 無関係なスタイル変更まで巻き戻してしまうため )。プロパティ単位で元値を退避し、ハイライト
+  // 解除時にそのまま書き戻す ( 元々未設定なら空文字に戻り、setで実質削除される )。
+  var HOVER_STYLE_PROPS = ["outline", "outlineOffset", "backgroundColor"];
+  var hoverEl = null;
+  var hoverSavedStyle = null;
+
+  function clearHover() {
+    if (!hoverEl) return;
+    for (var i = 0; i < HOVER_STYLE_PROPS.length; i++) {
+      var prop = HOVER_STYLE_PROPS[i];
+      hoverEl.style[prop] = hoverSavedStyle[prop];
+    }
+    hoverEl = null;
+    hoverSavedStyle = null;
+  }
+
+  function applyHover(el) {
+    if (el === hoverEl) return;
+    clearHover();
+    if (!el || el.nodeType !== 1) return;
+    var saved = {};
+    for (var i = 0; i < HOVER_STYLE_PROPS.length; i++) {
+      var prop = HOVER_STYLE_PROPS[i];
+      saved[prop] = el.style[prop];
+    }
+    el.style.outline = "2px solid rgba(255, 149, 0, 0.9)";
+    el.style.outlineOffset = "-2px";
+    el.style.backgroundColor = "rgba(255, 149, 0, 0.15)";
+    hoverEl = el;
+    hoverSavedStyle = saved;
+  }
+
+  // mouseover/mouseoutはネストした子要素間の移動で連続発火しうるため、実際のstyle書き換えは
+  // rAFで1フレームにつき最後の対象だけへ間引く ( scheduleHover(null)はハイライト解除の予約 )。
+  var hoverRaf = null;
+  var hoverPending = null;
+  var hoverPendingSet = false;
+  function scheduleHover(target) {
+    hoverPending = target;
+    hoverPendingSet = true;
+    if (hoverRaf !== null) return;
+    hoverRaf = window.requestAnimationFrame(function () {
+      hoverRaf = null;
+      if (hoverPendingSet) {
+        applyHover(hoverPending);
+        hoverPendingSet = false;
+      }
+    });
+  }
+
+  function cancelScheduledHover() {
+    hoverPendingSet = false;
+    if (hoverRaf !== null) {
+      window.cancelAnimationFrame(hoverRaf);
+      hoverRaf = null;
+    }
+  }
+
+  document.addEventListener("mouseover", function (e) {
+    if (!commentModeOn) return;
+    var el = e.target;
+    if (!el || el.nodeType !== 1) return;
+    scheduleHover(el);
+  }, true);
+
+  document.addEventListener("mouseout", function (e) {
+    if (!commentModeOn) return;
+    var related = e.relatedTarget;
+    if (related && hoverEl && (related === hoverEl || (hoverEl.contains && hoverEl.contains(related)))) return;
+    scheduleHover(null);
+  }, true);
+  // -------------------------------------------------------------------------
+
   document.addEventListener("click", function (e) {
     if (!commentModeOn) return;
     var el = e.target;
@@ -237,6 +355,9 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
       snippetHash: fnv1aHash(text),
       rect: rectOf(el)
     });
+    // pick確定でハイライトを確実に消す ( commentModeのoff往復を待たない )。
+    cancelScheduledHover();
+    clearHover();
   }, true);
 
   window.addEventListener("message", function (event) {
@@ -255,6 +376,10 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
       scheduleRects();
     } else if (data.type === "commentMode" && typeof data.on === "boolean") {
       commentModeOn = data.on;
+      if (!commentModeOn) {
+        cancelScheduledHover();
+        clearHover();
+      }
     } else if (data.type === "scrollTo" && typeof data.selector === "string") {
       var target = null;
       try {
