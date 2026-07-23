@@ -22,3 +22,6 @@
 
 # macOS
 .DS_Store
+
+# playwright-cli session logs
+/.playwright-cli/

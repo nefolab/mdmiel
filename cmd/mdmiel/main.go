@@ -4,8 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"mdmiel/internal/fsutil"
 	"mdmiel/internal/server"
 	"mdmiel/internal/store"
+	"mdmiel/internal/watch"
 	"mdmiel/web"
 	"net/http"
 	"os"
@@ -72,6 +74,13 @@ func main() {
 	srv, err := server.NewServer(absDir, web.Dist, fileStore)
 	if err != nil {
 		log.Fatalf("failed to create server: %v", err)
+	}
+	w, err := watch.New(absDir, fsutil.IsExcludedDir)
+	if err != nil {
+		log.Printf("live reload disabled: %v", err)
+	} else {
+		defer w.Close()
+		srv.StartLiveReload(w.Events())
 	}
 
 	handler := srv.Handler()
