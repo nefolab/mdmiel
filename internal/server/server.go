@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"math"
+	"mdmiel/internal/fsutil"
 	"mdmiel/internal/store"
 	"net"
 	"net/http"
@@ -15,13 +16,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 type Server struct {
-	rootDir string
-	webDist embed.FS
-	subFS   fs.FS
-	store   store.Store
+	rootDir             string
+	webDist             embed.FS
+	subFS               fs.FS
+	store               store.Store
+	hub                 *eventHub
+	startLiveReloadOnce sync.Once
 }
 
 // NewServer はrootDir配下を配信するmdmielサーバーを作る。
@@ -36,7 +40,14 @@ func NewServer(rootDir string, webDist embed.FS, st store.Store) (*Server, error
 		webDist: webDist,
 		subFS:   subFS,
 		store:   st,
+		hub:     newEventHub(),
 	}, nil
+}
+
+// StartLiveReload starts forwarding watcher revisions to SSE subscribers.
+// Calling it more than once is intentionally ignored.
+func (s *Server) StartLiveReload(revisions <-chan int) {
+	s.startLiveReloadOnce.Do(func() { go s.hub.run(revisions) })
 }
 
 type FileEntry struct {
@@ -127,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/files", s.handleFiles)
 	mux.HandleFunc("GET /api/file", s.handleFile)
+	mux.HandleFunc("GET /api/events", s.handleEvents)
 	mux.HandleFunc("GET /api/comments", s.handleCommentsList)
 	mux.HandleFunc("POST /api/comments", s.handleCommentsCreate)
 	mux.HandleFunc("GET /api/comments/{id...}", s.handleCommentGet)
@@ -235,7 +247,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if strings.HasPrefix(name, ".") || name == "node_modules" || name == ".mdmiel" {
+			if fsutil.IsExcludedDir(name) {
 				return filepath.SkipDir
 			}
 			return nil

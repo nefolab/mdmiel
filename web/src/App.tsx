@@ -8,8 +8,10 @@ import { collectUnresolvedComments, UnresolvedIdsByPane } from './lib/stickyLayo
 import { listComments, getComment } from './lib/commentsApi';
 import { Theme, getInitialTheme, applyTheme } from './lib/theme';
 import { setViewMode } from './lib/viewMode';
+import { useLiveReload } from './lib/liveReload';
 
 export default function App() {
+  const revision = useLiveReload();
   const [viewState, setViewState] = useState<ViewState>(() => parseHash(window.location.hash));
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
@@ -258,11 +260,13 @@ export default function App() {
       </header>
       <div className="app-container">
         <Sidebar
+          revision={revision}
           activeLeft={viewState.path || viewState.left}
           activeRight={viewState.right}
           onSelectFile={handleSelectFile}
         />
         <SplitView
+          revision={revision}
           viewState={viewState}
           onClosePane={handleClosePane}
           onPaneContentChange={handlePaneContentChange}

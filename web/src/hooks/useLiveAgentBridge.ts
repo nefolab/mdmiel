@@ -23,6 +23,8 @@ export interface LiveAgentPickResult {
 }
 
 export interface UseLiveAgentBridgeParams<T extends PaneDataLike> {
+  /** Filesystem revision; a change remounts the live iframe with a new nonce. */
+  revision: number;
   /** Target path for this pane (from viewState), driving nonce (re)generation independent of
    *  whether `data` for that path has finished loading yet. */
   path: string | undefined;
@@ -68,6 +70,7 @@ export interface UseLiveAgentBridgeResult {
  */
 export function useLiveAgentBridge<T extends PaneDataLike>({
   path,
+  revision,
   viewMode,
   data,
   comments,
@@ -78,7 +81,7 @@ export function useLiveAgentBridge<T extends PaneDataLike>({
   // Regenerated whenever the pane switches to a new path or (re-)enters live mode, so each
   // fresh agent instance gets its own nonce; the iframe is remounted (key change) in
   // lockstep via viewMode+nonce by the caller.
-  const nonce = useMemo(() => (viewMode === 'live' && path ? crypto.randomUUID() : ''), [viewMode, path]);
+  const nonce = useMemo(() => (viewMode === 'live' && path ? crypto.randomUUID() : ''), [viewMode, path, revision]);
 
   const [agentReady, setAgentReady] = useState(false);
   const [liveRects, setLiveRects] = useState<Record<string, LiveRect>>({});

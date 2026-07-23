@@ -14,6 +14,7 @@ interface TreeNode {
 }
 
 export interface SidebarProps {
+  revision: number;
   activeLeft?: string;
   activeRight?: string;
   onSelectFile: (path: string, pane: 'left' | 'right') => void;
@@ -47,27 +48,34 @@ function buildTree(files: FileItem[]): TreeNode {
   return root;
 }
 
-export function Sidebar({ activeLeft, activeRight, onSelectFile }: SidebarProps) {
+export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: SidebarProps) {
   const [files, setFiles] = useState<FileItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<{ [path: string]: boolean }>({});
 
   useEffect(() => {
+    let cancelled = false;
     fetch('/api/files')
       .then((res) => {
         if (!res.ok) throw new Error('Failed to load files');
         return res.json();
       })
       .then((data) => {
-        setFiles(data.files || []);
-        setLoading(false);
+        if (!cancelled) {
+          setFiles(data.files || []);
+          setError(null);
+          setLoading(false);
+        }
       })
       .catch((err) => {
-        setError(err.message);
-        setLoading(false);
+        if (!cancelled) {
+          setError(err.message);
+          setLoading(false);
+        }
       });
-  }, []);
+    return () => { cancelled = true; };
+  }, [revision]);
 
   const toggleCollapse = (path: string) => {
     setCollapsed((prev) => ({ ...prev, [path]: !prev[path] }));

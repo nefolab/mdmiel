@@ -23,6 +23,7 @@ export interface PaneContentInfo {
 }
 
 export interface SplitViewProps {
+  revision: number;
   viewState: ViewState;
   onClosePane: (pane: 'left' | 'right') => void;
   onPaneContentChange?: (pane: 'left' | 'right', data: PaneContentInfo | null) => void;
@@ -102,6 +103,7 @@ function ViewModeSwitcher({ mode, onChange }: ViewModeSwitcherProps) {
 
 export function SplitView({
   viewState,
+  revision,
   onClosePane,
   onPaneContentChange,
   onCommentAdded,
@@ -183,6 +185,7 @@ export function SplitView({
 
   const leftBridge = useLiveAgentBridge({
     path: leftPath,
+    revision,
     viewMode: leftViewMode,
     data: leftData,
     comments: leftComments,
@@ -192,6 +195,7 @@ export function SplitView({
   });
   const rightBridge = useLiveAgentBridge({
     path: rightPath,
+    revision,
     viewMode: rightViewMode,
     data: rightData,
     comments: rightComments,
@@ -235,6 +239,7 @@ export function SplitView({
   const fetchFile = async (filePath: string): Promise<PaneData> => {
     const res = await fetch(`/api/file?path=${encodeURIComponent(filePath)}`);
     if (!res.ok) {
+      if (res.status === 404) throw new Error('ファイルが削除されました');
       throw new Error(`ファイルの取得に失敗しました: ${filePath}`);
     }
     const data = await res.json();
@@ -264,7 +269,10 @@ export function SplitView({
           if (!cancelled) setLeftData(data);
         })
         .catch((err) => {
-          if (!cancelled) setLeftError(err.message);
+          if (!cancelled) {
+            setLeftData(null);
+            setLeftError(err.message);
+          }
         });
     } else {
       setLeftData(null);
@@ -272,7 +280,7 @@ export function SplitView({
     return () => {
       cancelled = true;
     };
-  }, [leftPath]);
+  }, [leftPath, revision]);
 
   // Load right pane data (same fast-switch race guard as the left pane above).
   useEffect(() => {
@@ -284,7 +292,10 @@ export function SplitView({
           if (!cancelled) setRightData(data);
         })
         .catch((err) => {
-          if (!cancelled) setRightError(err.message);
+          if (!cancelled) {
+            setRightData(null);
+            setRightError(err.message);
+          }
         });
     } else {
       setRightData(null);
@@ -292,7 +303,7 @@ export function SplitView({
     return () => {
       cancelled = true;
     };
-  }, [rightPath]);
+  }, [rightPath, revision]);
 
   // Share loaded pane content (path/type/content) with the parent so it can
   // pass raw file content down to CommentSidebar for rematchLine().
@@ -818,7 +829,7 @@ export function SplitView({
           )}
           {!leftError && leftData?.type === 'html' && leftViewMode === 'static' && (
             <iframe
-              key={`static-${leftData.path}`}
+              key={`static-${leftData.path}-${revision}`}
               ref={leftIframeRef}
               className="preview-iframe"
               sandbox="allow-same-origin"
@@ -890,7 +901,7 @@ export function SplitView({
             )}
             {!rightError && rightData?.type === 'html' && rightViewMode === 'static' && (
               <iframe
-                key={`static-${rightData.path}`}
+                key={`static-${rightData.path}-${revision}`}
                 ref={rightIframeRef}
                 className="preview-iframe"
                 sandbox="allow-same-origin"
