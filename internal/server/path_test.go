@@ -48,10 +48,44 @@ func TestResolveSecurePath(t *testing.T) {
 		t.Fatalf("failed to create unsafe link: %v", err)
 	}
 
+	// リンク切れのシンボリックリンク ( 境界内 / 境界外を指すもの )
+	danglingLink := filepath.Join(rootDir, "dangling_link")
+	if err := os.Symlink(filepath.Join(rootDir, "missing.txt"), danglingLink); err != nil {
+		t.Fatalf("failed to create dangling link: %v", err)
+	}
+	danglingUnsafeLink := filepath.Join(rootDir, "dangling_unsafe_link")
+	if err := os.Symlink(filepath.Join(tmpDir, "missing.txt"), danglingUnsafeLink); err != nil {
+		t.Fatalf("failed to create dangling unsafe link: %v", err)
+	}
+
+	// 循環シンボリックリンク ( loop_a -> loop_b -> loop_a )
+	if err := os.Symlink(filepath.Join(rootDir, "loop_b"), filepath.Join(rootDir, "loop_a")); err != nil {
+		t.Fatalf("failed to create loop_a: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(rootDir, "loop_a"), filepath.Join(rootDir, "loop_b")); err != nil {
+		t.Fatalf("failed to create loop_b: %v", err)
+	}
+
+	// 途中セグメントがリンク切れ ( 境界内を指すもの / 境界外を指すもの )
+	if err := os.Symlink(filepath.Join(rootDir, "missing_dir"), filepath.Join(rootDir, "broken_dir")); err != nil {
+		t.Fatalf("failed to create broken_dir: %v", err)
+	}
+	if err := os.Symlink(tmpDir, filepath.Join(rootDir, "escape_dir")); err != nil {
+		t.Fatalf("failed to create escape_dir: %v", err)
+	}
+
+	// t.TempDir はプラットフォームによってはシンボリックリンク配下 ( macOSの/var→/private/var等 )
+	// を返すため、解決済みパスの期待値はEvalSymlinks後のrootDirを基準にする
+	evalRootDir, err := filepath.EvalSymlinks(rootDir)
+	if err != nil {
+		t.Fatalf("failed to eval root dir: %v", err)
+	}
+
 	tests := []struct {
-		name    string
-		relPath string
-		wantErr error
+		name     string
+		relPath  string
+		wantErr  error
+		wantPath string // wantErrがnilのときのみ検証する ( rootDir基準の相対パス )
 	}{
 		{
 			name:    "safe file inside root",
@@ -89,14 +123,67 @@ func TestResolveSecurePath(t *testing.T) {
 			wantErr: ErrForbidden,
 		},
 		{
-			name:    "nonexistent file inside root ( returns OsNotExist but not ErrForbidden )",
-			relPath: "nonexistent.txt",
+			// 書き込み系のパス解決を成立させるため、境界が安全なら未作成のパスも解決して返す
+			name:     "nonexistent file inside root resolves",
+			relPath:  "nonexistent.txt",
+			wantErr:  nil,
+			wantPath: "nonexistent.txt",
+		},
+		{
+			name:     "nonexistent file inside subfolder resolves",
+			relPath:  "sub/nonexistent.txt",
+			wantErr:  nil,
+			wantPath: filepath.Join("sub", "nonexistent.txt"),
+		},
+		{
+			name:    "nonexistent file under nonexistent dir returns NotExist",
+			relPath: "nosuchdir/nonexistent.txt",
 			wantErr: os.ErrNotExist,
 		},
 		{
 			name:    "nonexistent file outside root rejected",
 			relPath: "../nonexistent.txt",
 			wantErr: ErrForbidden,
+		},
+		{
+			// リンク切れは追跡先を検証できないため、境界外を指し得るものとして拒否する
+			name:    "dangling symlink rejected",
+			relPath: "dangling_link",
+			wantErr: ErrForbidden,
+		},
+		{
+			name:    "dangling symlink pointing outside rejected",
+			relPath: "dangling_unsafe_link",
+			wantErr: ErrForbidden,
+		},
+		{
+			// 循環リンクはEvalSymlinksがELOOPを返すため、ENOENT分岐に落ちない
+			name:    "circular symlink rejected",
+			relPath: "loop_a",
+			wantErr: ErrForbidden,
+		},
+		{
+			// 通常ファイルをディレクトリとして辿るとENOTDIR。404相当に正規化する
+			name:    "path under regular file returns NotExist",
+			relPath: "safe.txt/child.txt",
+			wantErr: os.ErrNotExist,
+		},
+		{
+			// 途中セグメントがリンク切れの場合、親が解決できないのでNotExist
+			name:    "nonexistent file under broken symlink dir returns NotExist",
+			relPath: "broken_dir/child.txt",
+			wantErr: os.ErrNotExist,
+		},
+		{
+			// 途中セグメントのリンクが境界外を指す場合は親の境界チェックで拒否
+			name:    "nonexistent file under escaping symlink dir rejected",
+			relPath: "escape_dir/child.txt",
+			wantErr: ErrForbidden,
+		},
+		{
+			name:    "multi level nonexistent path returns NotExist",
+			relPath: "a/b/c/d.txt",
+			wantErr: os.ErrNotExist,
 		},
 		{
 			name:    "empty path rejected",
@@ -127,7 +214,7 @@ func TestResolveSecurePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ResolveSecurePath(rootDir, tt.relPath)
+			got, err := ResolveSecurePath(rootDir, tt.relPath)
 			if tt.wantErr != nil {
 				if err == nil {
 					t.Errorf("expected error, got nil")
@@ -136,9 +223,18 @@ func TestResolveSecurePath(t *testing.T) {
 				} else if tt.wantErr == os.ErrNotExist && !os.IsNotExist(err) {
 					t.Errorf("expected NotExist error, got %v", err)
 				}
+				if got != "" {
+					t.Errorf("expected empty path on error, got %s", got)
+				}
 			} else {
 				if err != nil {
 					t.Errorf("unexpected error: %v", err)
+				}
+				if tt.wantPath != "" {
+					want := filepath.Join(evalRootDir, tt.wantPath)
+					if got != want {
+						t.Errorf("expected resolved path %s, got %s", want, got)
+					}
 				}
 			}
 		})

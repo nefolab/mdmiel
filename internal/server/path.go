@@ -2,8 +2,10 @@ package server
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 var (
@@ -16,6 +18,12 @@ var (
 // 1. 絶対パス指定の拒否
 // 2. filepath.Join 後の filepath.Rel を用いた境界チェック
 // 3. シンボリックリンク解決 ( filepath.EvalSymlinks ) 後の境界チェック
+//
+// 未作成のパスも、親ディレクトリが境界内なら解決して返します。
+//
+// 制約: 本関数はパス文字列を検査して返すだけなので、解決から利用までの間に
+// 対象を境界外シンボリックリンクへ差し替えられるTOCTOUを防げません。書き込み先の
+// 決定にそのまま使わないでください ( 解決と利用を一体化する os.Root 系への移行が本筋 )。
 func ResolveSecurePath(rootDir, relPath string) (string, error) {
 	// 空パスの拒否 ( ルートディレクトリ自体を返さない )
 	if relPath == "" {
@@ -70,16 +78,34 @@ func ResolveSecurePath(rootDir, relPath string) (string, error) {
 	// 対象パスのシンボリックリンク解決
 	evalJoined, err := filepath.EvalSymlinks(joined)
 	if err != nil {
-		// ファイルまたはディレクトリが存在しない場合、親ディレクトリの境界チェックを行う
+		// 通常ファイルをディレクトリとして辿ったパス ( existing.txt/foo ) は
+		// 存在しないリソースとして扱い、呼び出し側が404にマップできるようにする
+		if errors.Is(err, syscall.ENOTDIR) {
+			return "", os.ErrNotExist
+		}
+		// 実体があるのに解決できないケース ( リンク切れ・循環したシンボリックリンク ) は
+		// 追跡先を検証できない。境界外を指している可能性があるため拒否する。
+		// EvalSymlinksは循環時にELOOPではなく素のerrorを返すため、エラー種別の分類ではなく
+		// Lstatによる実体の有無で判定する
+		if _, errLstat := os.Lstat(joined); errLstat == nil {
+			return "", ErrForbidden
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		// パスの末尾が存在しない場合は、親ディレクトリまでを解決して境界チェックを行い、
+		// 解決済みの親 + 末尾セグメントを返す ( 書き込み系のパス解決を成立させるため )。
+		// 親自体が存在しない場合は解決不能なので、そのまま NotExist を返す。
 		parent := filepath.Dir(joined)
 		evalParent, errParent := filepath.EvalSymlinks(parent)
-		if errParent == nil {
-			relParent, errRel := filepath.Rel(evalRootDir, evalParent)
-			if errRel != nil || strings.HasPrefix(relParent, "..") {
-				return "", ErrForbidden
-			}
+		if errParent != nil {
+			return "", err
 		}
-		return "", err
+		relParent, errRel := filepath.Rel(evalRootDir, evalParent)
+		if errRel != nil || strings.HasPrefix(relParent, "..") {
+			return "", ErrForbidden
+		}
+		return filepath.Join(evalParent, filepath.Base(joined)), nil
 	}
 
 	// 解決後のパスが evalRootDir の配下にあるか検証

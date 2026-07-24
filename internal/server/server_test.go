@@ -254,6 +254,30 @@ func TestCommentsAPI(t *testing.T) {
 		}
 	})
 
+	// ResolveSecurePathは境界が安全なら未作成のパスも解決して返すため、
+	// コメントAPIが実在チェックを別途行っていることを確認する ( 存在しないファイルは404 )
+	t.Run("GET /api/comments for nonexistent file returns 404", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/comments?path=nonexistent.md", nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d", rec.Code)
+		}
+	})
+
+	t.Run("POST /api/comments for nonexistent file returns 404", func(t *testing.T) {
+		body := `{"path":"nonexistent.md","anchor":{"line":1,"snippet":"x","snippetHash":"h"},"body":"ghost comment"}`
+		req := httptest.NewRequest("POST", "/api/comments", strings.NewReader(body))
+		req.Host = "127.0.0.1:8686"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
 	// POST /api/comments で作成すると201が返り、.mdmiel/comments/<id>.jsonに永続化される
 	createBody := `{"path":"spec.md","anchor":{"line":1,"snippet":"# Spec","snippetHash":"h1"},"body":"first comment"}`
 	req := httptest.NewRequest("POST", "/api/comments", strings.NewReader(createBody))
