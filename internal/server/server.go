@@ -409,6 +409,9 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 
 // resolveTargetPath はコメントAPIのpathパラメータをResolveSecurePathで検証する。
 // 検証NGの場合はレスポンスを書き込んでokにfalseを返す ( 呼び出し元はそのままreturnする )。
+//
+// ResolveSecurePathは存在しないパスでも境界が安全なら解決済みパスを返すため、
+// 「実在するファイルにのみコメントを許可する」条件はここで明示的に担保する。
 func (s *Server) resolveTargetPath(w http.ResponseWriter, relPath string) (resolved string, ok bool) {
 	resolved, err := ResolveSecurePath(s.rootDir, relPath)
 	if err != nil {
@@ -423,6 +426,16 @@ func (s *Server) resolveTargetPath(w http.ResponseWriter, relPath string) (resol
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return "", false
 	}
+
+	if _, err := os.Stat(resolved); err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return "", false
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return "", false
+	}
+
 	return resolved, true
 }
 

@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -70,16 +71,27 @@ func ResolveSecurePath(rootDir, relPath string) (string, error) {
 	// 対象パスのシンボリックリンク解決
 	evalJoined, err := filepath.EvalSymlinks(joined)
 	if err != nil {
-		// ファイルまたはディレクトリが存在しない場合、親ディレクトリの境界チェックを行う
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		// パスの末尾が存在しない場合は、親ディレクトリまでを解決して境界チェックを行い、
+		// 解決済みの親 + 末尾セグメントを返す ( 書き込み系のパス解決を成立させるため )。
+		// 親自体が存在しない場合は解決不能なので、そのまま NotExist を返す。
 		parent := filepath.Dir(joined)
 		evalParent, errParent := filepath.EvalSymlinks(parent)
-		if errParent == nil {
-			relParent, errRel := filepath.Rel(evalRootDir, evalParent)
-			if errRel != nil || strings.HasPrefix(relParent, "..") {
-				return "", ErrForbidden
-			}
+		if errParent != nil {
+			return "", err
 		}
-		return "", err
+		relParent, errRel := filepath.Rel(evalRootDir, evalParent)
+		if errRel != nil || strings.HasPrefix(relParent, "..") {
+			return "", ErrForbidden
+		}
+		// 末尾セグメントが実体を持つのに解決できないケース ( リンク切れ・循環したシンボリック
+		// リンク ) は追跡先を検証できない。境界外を指している可能性があるため拒否する。
+		if _, errLstat := os.Lstat(joined); errLstat == nil {
+			return "", ErrForbidden
+		}
+		return filepath.Join(evalParent, filepath.Base(joined)), nil
 	}
 
 	// 解決後のパスが evalRootDir の配下にあるか検証
