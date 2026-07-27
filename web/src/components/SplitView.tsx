@@ -8,6 +8,7 @@ import { renderMarkdown } from '../renderer/markdown';
 import { renderHtml, renderHtmlLive } from '../renderer/html';
 import { ViewMode, getViewMode, setViewMode as persistViewMode } from '../lib/viewMode';
 import { useLiveAgentBridge, LiveAgentPickResult } from '../hooks/useLiveAgentBridge';
+import { useStaticPickBridge } from '../hooks/useStaticPickBridge';
 
 interface PaneData {
   path: string;
@@ -101,6 +102,26 @@ function ViewModeSwitcher({ mode, onChange }: ViewModeSwitcherProps) {
   );
 }
 
+interface AddCommentButtonProps {
+  armed: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}
+
+function AddCommentButton({ armed, disabled, onToggle }: AddCommentButtonProps) {
+  const label = disabled ? 'ページを開き直してください' : armed ? 'クリックして配置...' : 'コメント追加';
+  return (
+    <button
+      className={`pane-add-comment-btn ${armed ? 'active' : ''}`}
+      onClick={onToggle}
+      disabled={disabled}
+      title={disabled ? '表示中のページにはコメントを追加できません' : armed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
+    >
+      {label}
+    </button>
+  );
+}
+
 export function SplitView({
   viewState,
   revision,
@@ -134,13 +155,6 @@ export function SplitView({
   const rightContentRef = useRef<HTMLDivElement>(null);
   const leftIframeRef = useRef<HTMLIFrameElement>(null);
   const rightIframeRef = useRef<HTMLIFrameElement>(null);
-  // Tracks the currently-registered contextmenu handler (and the document it
-  // was attached to) per pane, so handleIframeLoad can remove the previous
-  // listener before adding a new one instead of stacking duplicates if the
-  // same document fires 'load' more than once.
-  const iframeContextMenuRef = useRef<
-    Partial<Record<'left' | 'right', { doc: Document; handler: (e: MouseEvent) => void }>>
-  >({});
   // Holds the pending auto-dismiss timer id for the toast, so a new showToast() call
   // clears any still-pending timer from a previous call instead of letting an earlier
   // timer clear a message that a later call just set.
@@ -199,6 +213,24 @@ export function SplitView({
     viewMode: rightViewMode,
     data: rightData,
     comments: rightComments,
+    iframeRef: rightIframeRef,
+    containerRef: rightContentRef,
+    onPick: handleRightPick,
+  });
+  const leftStaticPick = useStaticPickBridge({
+    path: leftPath,
+    revision,
+    viewMode: leftViewMode,
+    data: leftData,
+    iframeRef: leftIframeRef,
+    containerRef: leftContentRef,
+    onPick: handleLeftPick,
+  });
+  const rightStaticPick = useStaticPickBridge({
+    path: rightPath,
+    revision,
+    viewMode: rightViewMode,
+    data: rightData,
     iframeRef: rightIframeRef,
     containerRef: rightContentRef,
     onPick: handleRightPick,
@@ -502,51 +534,6 @@ export function SplitView({
     }
   };
 
-  const handleIframeLoad = (pane: 'left' | 'right', iframeRef: React.RefObject<HTMLIFrameElement>) => {
-    const iframe = iframeRef.current;
-    if (!iframe || !iframe.contentDocument) return;
-
-    const doc = iframe.contentDocument;
-
-    // Remove any previously-registered handler for this pane before adding a
-    // new one, keeping add/remove symmetric even across repeated load events.
-    const prev = iframeContextMenuRef.current[pane];
-    if (prev) {
-      prev.doc.removeEventListener('contextmenu', prev.handler);
-    }
-
-    const onIframeContextMenu = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      const el = target.closest('[data-source-line]');
-      if (!el) {
-        // No anchorable element under the cursor: let the native context menu show.
-        return;
-      }
-      const line = parseInt(el.getAttribute('data-source-line') || '', 10);
-      if (isNaN(line)) {
-        return;
-      }
-
-      e.preventDefault();
-
-      const rect = el.getBoundingClientRect();
-      const iframeRect = iframe.getBoundingClientRect();
-      const container = splitViewRef.current;
-      if (container) {
-        const containerRect = container.getBoundingClientRect();
-        setMenuState({
-          pane,
-          line,
-          top: iframeRect.top - containerRect.top + rect.top + container.scrollTop,
-          left: iframeRect.left - containerRect.left + rect.left - 60,
-        });
-      }
-    };
-
-    doc.addEventListener('contextmenu', onIframeContextMenu);
-    iframeContextMenuRef.current[pane] = { doc, handler: onIframeContextMenu };
-  };
-
   const handleCopyLink = () => {
     if (!menuState) return;
 
@@ -695,10 +682,7 @@ export function SplitView({
     );
   }
 
-  // 行リンクはmd側のみ維持し、html側は付箋リンク ( /#/comment/<id> ) に一本化する
-  // ( working/idea-live-prototype-review.md の決定事項 )。行コメントの追加自体はhtml静的
-  // ペインでも引き続き可能なので、gutter-comment-btnはpane種別を問わず表示する。
-  const menuPaneType = menuState ? (menuState.pane === 'left' ? leftData?.type : rightData?.type) : undefined;
+  // HTML側はボタン方式 + DOMアンカーに統一したため、右クリック経路はmarkdown専用。
 
   return (
     <div className="split-view-container" ref={splitViewRef}>
@@ -711,28 +695,26 @@ export function SplitView({
           className="gutter-actions"
           style={{ top: `${menuState.top}px`, left: `${Math.max(menuState.left, 0)}px` }}
         >
-          {menuPaneType === 'markdown' && (
-            <button
-              className="gutter-link-btn"
-              onClick={handleCopyLink}
-              title={`行リンクをコピー ( 行: ${menuState.line} )`}
+          <button
+            className="gutter-link-btn"
+            onClick={handleCopyLink}
+            title={`行リンクをコピー ( 行: ${menuState.line} )`}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
             >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-              </svg>
-            </button>
-          )}
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+          </button>
           <button
             className="gutter-comment-btn"
             onClick={handleOpenCommentForm}
@@ -802,14 +784,12 @@ export function SplitView({
             {leftData?.type === 'html' && (
               <ViewModeSwitcher mode={leftViewMode} onChange={(mode) => handleSetViewMode('left', mode)} />
             )}
-            {leftData?.type === 'html' && leftViewMode === 'live' && (
-              <button
-                className={`pane-add-comment-btn ${leftBridge.armed ? 'active' : ''}`}
-                onClick={() => leftBridge.toggleArmed()}
-                title={leftBridge.armed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
-              >
-                {leftBridge.armed ? 'クリックして配置...' : 'コメント追加'}
-              </button>
+            {leftData?.type === 'html' && (
+              <AddCommentButton
+                armed={leftViewMode === 'live' ? leftBridge.armed : leftStaticPick.armed}
+                disabled={leftViewMode === 'static' ? leftStaticPick.disabled : undefined}
+                onToggle={leftViewMode === 'live' ? leftBridge.toggleArmed : leftStaticPick.toggleArmed}
+              />
             )}
             {rightPath && (
               <button className="close-btn" onClick={() => onClosePane('left')} title="左ペインを閉じる">
@@ -834,7 +814,7 @@ export function SplitView({
               className="preview-iframe"
               sandbox="allow-same-origin"
               srcDoc={leftData.renderedHtml}
-              onLoad={() => handleIframeLoad('left', leftIframeRef)}
+              onLoad={() => leftStaticPick.handleIframeLoad()}
             />
           )}
           {!leftError && leftData?.type === 'html' && leftViewMode === 'live' && leftBridge.nonce && (
@@ -876,14 +856,12 @@ export function SplitView({
               {rightData?.type === 'html' && (
                 <ViewModeSwitcher mode={rightViewMode} onChange={(mode) => handleSetViewMode('right', mode)} />
               )}
-              {rightData?.type === 'html' && rightViewMode === 'live' && (
-                <button
-                  className={`pane-add-comment-btn ${rightBridge.armed ? 'active' : ''}`}
-                  onClick={() => rightBridge.toggleArmed()}
-                  title={rightBridge.armed ? 'クリックでキャンセル' : '次の1クリックで付箋を配置'}
-                >
-                  {rightBridge.armed ? 'クリックして配置...' : 'コメント追加'}
-                </button>
+              {rightData?.type === 'html' && (
+                <AddCommentButton
+                  armed={rightViewMode === 'live' ? rightBridge.armed : rightStaticPick.armed}
+                  disabled={rightViewMode === 'static' ? rightStaticPick.disabled : undefined}
+                  onToggle={rightViewMode === 'live' ? rightBridge.toggleArmed : rightStaticPick.toggleArmed}
+                />
               )}
               <button className="close-btn" onClick={() => onClosePane('right')} title="右ペインを閉じる">
                 ✕
@@ -906,7 +884,7 @@ export function SplitView({
                 className="preview-iframe"
                 sandbox="allow-same-origin"
                 srcDoc={rightData.renderedHtml}
-                onLoad={() => handleIframeLoad('right', rightIframeRef)}
+                onLoad={() => rightStaticPick.handleIframeLoad()}
               />
             )}
             {!rightError && rightData?.type === 'html' && rightViewMode === 'live' && rightBridge.nonce && (

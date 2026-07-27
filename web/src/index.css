@@ -401,6 +401,14 @@ body {
   border-color: var(--color-accent);
 }
 
+.pane-add-comment-btn:disabled,
+.pane-add-comment-btn:disabled:hover {
+  cursor: not-allowed;
+  opacity: 0.55;
+  color: var(--color-muted);
+  border-color: var(--color-border);
+}
+
 .pane-add-comment-btn.active {
   background-color: var(--color-accent-soft);
   border-color: var(--color-accent);

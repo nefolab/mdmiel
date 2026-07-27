@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect, vi } from 'vitest';
 import { renderAgentScript } from './agent';
 import { snippetHash } from '../lib/comments';
+import { buildDomSelector, extractAnchorText } from '../lib/domAnchor';
 
 /**
  * Extracts a top-level `function <name>(...) { ... }` declaration from the rendered
@@ -51,6 +52,43 @@ describe('agent fnv1aHash matches lib/comments.ts snippetHash', () => {
     for (const input of cases) {
       expect(fnv1aHash(input)).toBe(snippetHash(input));
     }
+  });
+});
+
+describe('agent buildSelector / extractText match lib/domAnchor.ts', () => {
+  const script = renderAgentScript('dom-anchor-equivalence');
+  const buildSelector = extractFunction(script, 'buildSelector') as (el: Element | null) => string;
+  const extractText = extractFunction(script, 'extractText') as (el: Element | null) => string;
+
+  afterEach(() => {
+    document.body.innerHTML = '';
+    vi.unstubAllGlobals();
+  });
+
+  it('matches a representative DOM corpus', () => {
+    document.body.innerHTML = '<section id="id target"> id </section><div> test </div><main><p> 日本語   text </p><p></p></main>';
+    document.querySelector('div')!.setAttribute('data-testid', 'a"b');
+    for (const length of [79, 80, 81]) {
+      const el = document.createElement('p');
+      el.textContent = 'x'.repeat(length);
+      document.body.append(el);
+    }
+    let deep = document.body as Element;
+    for (let i = 0; i < 21; i++) { const child = document.createElement('div'); deep.append(child); deep = child; }
+    const detached = document.createElement('aside');
+    const elements = [...document.querySelectorAll('*'), detached];
+    for (const el of elements) {
+      expect(buildSelector(el)).toBe(buildDomSelector(el));
+      expect(extractText(el)).toBe(extractAnchorText(el));
+    }
+    expect(extractText(document.querySelectorAll('p')[3])).toHaveLength(80);
+  });
+
+  it('matches when CSS.escape is available', () => {
+    vi.stubGlobal('CSS', { escape: (value: string) => `escaped-${value}` });
+    const el = document.createElement('div'); el.id = 'a b';
+    expect(buildDomSelector(el)).toBe('#escaped-a b');
+    expect(buildSelector(el)).toBe(buildDomSelector(el));
   });
 });
 
