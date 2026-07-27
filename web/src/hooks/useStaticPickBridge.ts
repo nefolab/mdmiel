@@ -58,26 +58,41 @@ export function useStaticPickBridge<T extends { path: string }>({
     clearHover();
   }, [clearHover]);
 
+  // Only ever called from the iframe's own load event, so the document is settled by now:
+  // a contentDocument we cannot reach means the pane followed a link to another origin,
+  // not that we looked too early. Leaving the button enabled there would offer a gesture
+  // that silently does nothing (no guards are attached), so treat it exactly like the
+  // same-origin navigation case below. Both recover on the next load that restores srcdoc.
   const attach = useCallback(() => {
     detach();
     let doc: Document | null = null;
     try {
       doc = iframeRef.current?.contentDocument ?? null;
     } catch {
-      return;
+      doc = null;
     }
-    if (!doc) return;
-    let url = '';
-    try {
-      url = doc.URL;
-    } catch {
-      return;
+    let url: string | null = null;
+    if (doc) {
+      try {
+        url = doc.URL;
+      } catch {
+        url = null;
+      }
     }
-    if (url && url !== 'about:srcdoc') {
+    if (!doc || url === null) {
       setDisabled(true);
       setArmed(false);
       return;
     }
+    // Compare without the fragment: following an in-page link leaves the document at
+    // about:srcdoc#foo, which is still the srcdoc we rendered rather than a navigation.
+    if (url && url.split('#')[0] !== 'about:srcdoc') {
+      setDisabled(true);
+      setArmed(false);
+      return;
+    }
+    // An empty URL is not a navigation signal (jsdom reports it for freshly created
+    // documents), so leave the pane usable rather than disabling it on a guess.
     if (!url) return;
     setDisabled(false);
 
