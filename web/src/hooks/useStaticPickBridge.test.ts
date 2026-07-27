@@ -128,4 +128,38 @@ describe('useStaticPickBridge', () => {
     act(() => bridge?.toggleArmed()); act(() => bridge?.handleIframeLoad());
     expect(bridge?.disabled).toBe(true); expect(bridge?.armed).toBe(false); iframeDoc = navigated.doc; event('click', navigated.doc.querySelector('div')!); expect(onPick).not.toHaveBeenCalled();
   });
+
+  // A cross-origin navigation hides contentDocument entirely, so the URL check above never
+  // gets to run. Without this the button would stay enabled while no guards are attached.
+  it('disables itself when a cross-origin document hides contentDocument', () => {
+    render(); act(() => bridge?.toggleArmed());
+    const opaque = document.createElement('iframe'); document.body.append(opaque); frames.push(opaque);
+    Object.defineProperty(opaque, 'contentDocument', { configurable: true, value: null });
+    iframeRef.current = opaque; act(() => bridge?.handleIframeLoad());
+    expect(bridge?.disabled).toBe(true); expect(bridge?.armed).toBe(false);
+  });
+
+  it('disables itself when reading contentDocument throws', () => {
+    render(); act(() => bridge?.toggleArmed());
+    const opaque = document.createElement('iframe'); document.body.append(opaque); frames.push(opaque);
+    Object.defineProperty(opaque, 'contentDocument', { configurable: true, get() { throw new Error('cross-origin'); } });
+    iframeRef.current = opaque; act(() => bridge?.handleIframeLoad());
+    expect(bridge?.disabled).toBe(true); expect(bridge?.armed).toBe(false);
+  });
+
+  it('stays enabled after an in-page link leaves a fragment on the srcdoc URL', () => {
+    render(); const fragment = makeIframe('about:srcdoc#section'); fragment.doc.body.innerHTML = '<div>target</div>';
+    iframeRef.current = fragment.iframe; iframeDoc = fragment.doc; act(() => bridge?.handleIframeLoad());
+    expect(bridge?.disabled).toBe(false);
+    act(() => bridge?.toggleArmed()); event('click', fragment.doc.querySelector('div')!); expect(onPick).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-enables itself once the pane returns to its srcdoc document', () => {
+    render(); const opaque = document.createElement('iframe'); document.body.append(opaque); frames.push(opaque);
+    Object.defineProperty(opaque, 'contentDocument', { configurable: true, value: null });
+    iframeRef.current = opaque; act(() => bridge?.handleIframeLoad()); expect(bridge?.disabled).toBe(true);
+    const restored = makeIframe(); restored.doc.body.innerHTML = '<div>target</div>'; iframeRef.current = restored.iframe; iframeDoc = restored.doc;
+    act(() => bridge?.handleIframeLoad()); expect(bridge?.disabled).toBe(false);
+    act(() => bridge?.toggleArmed()); event('click', restored.doc.querySelector('div')!); expect(onPick).toHaveBeenCalledTimes(1);
+  });
 });
