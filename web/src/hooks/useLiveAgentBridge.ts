@@ -3,6 +3,7 @@ import { Comment } from '../lib/comments';
 import { ViewMode } from '../lib/viewMode';
 import { LiveRect } from '../components/StickyNoteLayer';
 import { buildAnchorsPayload, buildLiveRectsMap, computePickPosition, parseIncomingMessage } from '../lib/liveBridge';
+import { PanePickResult } from '../lib/domAnchor';
 
 /** Minimal shape useLiveAgentBridge needs from a pane's loaded data. */
 interface PaneDataLike {
@@ -10,17 +11,7 @@ interface PaneDataLike {
 }
 
 /** Result handed to onPick when the agent reports a "pick" while the pane is armed. */
-export interface LiveAgentPickResult {
-  /** The bridge's loaded-data path at pick time (kept distinct from the caller's own path
-   *  prop, matching the original SplitView behavior of reading bridge.path). */
-  path: string;
-  /** Position of the picked element, translated into the pane's content-container coordinate space. */
-  top: number;
-  left: number;
-  selector: string;
-  snippet: string;
-  snippetHash: string;
-}
+export type LiveAgentPickResult = PanePickResult;
 
 export interface UseLiveAgentBridgeParams<T extends PaneDataLike> {
   /** Filesystem revision; a change remounts the live iframe with a new nonce. */
