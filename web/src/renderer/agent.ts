@@ -243,7 +243,9 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   }
 
   if (typeof MutationObserver === "function") {
-    var observer = new MutationObserver(function () {
+    var observer = new MutationObserver(function (records) {
+      if (commentModeOn && overlayEl && !document.contains(overlayEl)) ensureOverlay();
+      if (isOverlayOnlyMutation(records, overlayEl)) return;
       resolveAll();
       scheduleRects();
     });
@@ -262,9 +264,92 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   window.addEventListener("resize", function () { scheduleGeometry("resize"); scheduleRects(); });
 
   // "コメント追加"がarmされている間だけtrue。親からの{type:"commentMode",on}で
-  // 切り替わる。offの間はクリックのたびにpickを送らない ( 無条件送信をやめる。親側の
-  // bridge.armedチェックは防御として残るが、agent側でも不要な送信自体を止める )。
+  // 切り替わる。offの間は入力ガードが何もしないため、モック本来の挙動を保てる。
   var commentModeOn = false;
+  var OVERLAY_ATTR = "data-mdmiel-overlay";
+  var OVERLAY_STYLE = [
+    ["position", "fixed"], ["inset", "0"], ["z-index", "2147483647"],
+    ["pointer-events", "auto"], ["cursor", "crosshair"], ["background", "transparent"],
+    ["touch-action", "none"], ["margin", "0"], ["padding", "0"], ["border", "0"],
+    ["display", "block"], ["visibility", "visible"], ["opacity", "1"], ["transform", "none"]
+  ];
+  var GUARD_EVENTS = ["click", "mousedown", "mouseup", "pointerdown", "pointerup", "pointermove", "dblclick", "auxclick", "contextmenu", "touchstart", "touchend", "mousemove", "mouseover", "mouseout", "dragstart", "wheel", "touchmove"];
+  // touchstart must only be stopped, not cancelled: cancelling it suppresses the compatibility
+  // mouse events that produce the click used for touch picking. touchmove stops scrolling.
+  var PREVENT_DEFAULT_EVENTS = ["click", "mousedown", "pointerdown", "dblclick", "auxclick", "contextmenu", "dragstart", "wheel", "touchmove"];
+  var overlayEl = null;
+  var pickInFlight = false;
+
+  function createOverlay() {
+    var overlay = document.createElement("div");
+    for (var i = 0; i < OVERLAY_STYLE.length; i++) {
+      overlay.style.setProperty(OVERLAY_STYLE[i][0], OVERLAY_STYLE[i][1], "important");
+    }
+    overlay.setAttribute(OVERLAY_ATTR, "");
+    overlay.setAttribute("aria-hidden", "true");
+    return overlay;
+  }
+
+  function ensureOverlay() {
+    if (!overlayEl) overlayEl = createOverlay();
+    if (!document.contains(overlayEl)) {
+      var parent = document.documentElement;
+      if (!parent) parent = document.body;
+      if (!parent) return null;
+      parent.appendChild(overlayEl);
+    }
+    return overlayEl;
+  }
+
+  function removeOverlay() {
+    if (overlayEl && overlayEl.parentNode) overlayEl.parentNode.removeChild(overlayEl);
+  }
+
+  function hitTest(overlay, x, y) {
+    if (typeof document.elementFromPoint !== "function") return null;
+    try {
+      if (overlay) overlay.style.setProperty("pointer-events", "none", "important");
+      return document.elementFromPoint(x, y);
+    } catch (e) {
+      return null;
+    } finally {
+      if (overlay) overlay.style.setProperty("pointer-events", "auto", "important");
+    }
+  }
+
+  function isOverlayHit(el, overlay) {
+    return !!(el && overlay && (el === overlay || (overlay.contains && overlay.contains(el))));
+  }
+
+  function isPickableTarget(el, overlay) {
+    if (!el || el.nodeType !== 1 || isOverlayHit(el, overlay)) return false;
+    return el !== document.documentElement && el !== document.body;
+  }
+
+  function targetAt(x, y) {
+    var target = hitTest(overlayEl, x, y);
+    return isPickableTarget(target, overlayEl) ? target : null;
+  }
+
+  function nodeListHasOnlyOverlay(list, overlay) {
+    if (!list || list.length === 0) return true;
+    for (var i = 0; i < list.length; i++) {
+      if (list[i] !== overlay) return false;
+    }
+    return true;
+  }
+
+  function isOverlayOnlyMutation(records, overlay) {
+    if (!overlay || !records || records.length === 0) return false;
+    for (var i = 0; i < records.length; i++) {
+      var record = records[i];
+      if (record.type === "attributes" && record.target === overlay) continue;
+      if (record.type !== "childList" ||
+          !nodeListHasOnlyOverlay(record.addedNodes, overlay) ||
+          !nodeListHasOnlyOverlay(record.removedNodes, overlay)) return false;
+    }
+    return true;
+  }
 
   // --- コメントモードhoverハイライト (L2) --------------------------------
   // commentMode ON中、hover中の要素にoutlineを表示する。書き換えるのはoutline系の3プロパティ
@@ -301,51 +386,37 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
     hoverSavedStyle = saved;
   }
 
-  // mouseover/mouseoutはネストした子要素間の移動で連続発火しうるため、実際のstyle書き換えは
-  // rAFで1フレームにつき最後の対象だけへ間引く ( scheduleHover(null)はハイライト解除の予約 )。
+  // mousemoveは連続発火しうるため、実際のヒットテストとstyle書き換えはrAFで1フレームにつき
+  // 最後の座標だけへ間引く。elementFromPointはレイアウトをフラッシュしうるためここでだけ呼ぶ。
   var hoverRaf = null;
-  var hoverPending = null;
-  var hoverPendingSet = false;
-  function scheduleHover(target) {
-    hoverPending = target;
-    hoverPendingSet = true;
+  var hoverX = 0;
+  var hoverY = 0;
+  var hoverPointSet = false;
+  function scheduleHoverAt(x, y) {
+    hoverX = x;
+    hoverY = y;
+    hoverPointSet = true;
     if (hoverRaf !== null) return;
     hoverRaf = window.requestAnimationFrame(function () {
       hoverRaf = null;
-      if (hoverPendingSet) {
-        applyHover(hoverPending);
-        hoverPendingSet = false;
+      if (hoverPointSet) {
+        applyHover(targetAt(hoverX, hoverY));
+        hoverPointSet = false;
       }
     });
   }
 
   function cancelScheduledHover() {
-    hoverPendingSet = false;
+    hoverPointSet = false;
     if (hoverRaf !== null) {
       window.cancelAnimationFrame(hoverRaf);
       hoverRaf = null;
     }
   }
 
-  document.addEventListener("mouseover", function (e) {
-    if (!commentModeOn) return;
-    var el = e.target;
-    if (!el || el.nodeType !== 1) return;
-    scheduleHover(el);
-  }, true);
-
-  document.addEventListener("mouseout", function (e) {
-    if (!commentModeOn) return;
-    var related = e.relatedTarget;
-    if (related && hoverEl && (related === hoverEl || (hoverEl.contains && hoverEl.contains(related)))) return;
-    scheduleHover(null);
-  }, true);
-  // -------------------------------------------------------------------------
-
-  document.addEventListener("click", function (e) {
-    if (!commentModeOn) return;
-    var el = e.target;
-    if (!el || el.nodeType !== 1) return;
+  function sendPickAt(x, y) {
+    var el = targetAt(x, y);
+    if (!el) return;
     var text = extractText(el);
     send({
       type: "pick",
@@ -356,9 +427,38 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
       rect: rectOf(el)
     });
     // pick確定でハイライトを確実に消す ( commentModeのoff往復を待たない )。
+    pickInFlight = true;
     cancelScheduledHover();
     clearHover();
-  }, true);
+  }
+
+  function isPickEvent(e) {
+    // Scripted clicks have no user coordinates (normally 0,0), which would otherwise pick
+    // an unrelated element at the viewport origin and consume the current armed state.
+    return e.isTrusted && e.detail > 0;
+  }
+
+  function onGuardEvent(e) {
+    if (!commentModeOn) return;
+    if (PREVENT_DEFAULT_EVENTS.indexOf(e.type) !== -1) e.preventDefault();
+    e.stopImmediatePropagation();
+    if (e.type === "mousemove") {
+      if (!pickInFlight) scheduleHoverAt(e.clientX, e.clientY);
+    } else if (e.type === "mouseout") {
+      if (!e.relatedTarget || !isOverlayHit(e.relatedTarget, overlayEl)) {
+        cancelScheduledHover();
+        clearHover();
+      }
+    } else if (e.type === "click" && !pickInFlight) {
+      if (isPickEvent(e)) sendPickAt(e.clientX, e.clientY);
+    }
+  }
+
+  for (var guardIndex = 0; guardIndex < GUARD_EVENTS.length; guardIndex++) {
+    window.addEventListener(GUARD_EVENTS[guardIndex], onGuardEvent, { capture: true, passive: false });
+    document.addEventListener(GUARD_EVENTS[guardIndex], onGuardEvent, { capture: true, passive: false });
+  }
+  // -------------------------------------------------------------------------
 
   window.addEventListener("message", function (event) {
     if (parentOrigin && event.origin !== parentOrigin) return;
@@ -376,9 +476,13 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
       scheduleRects();
     } else if (data.type === "commentMode" && typeof data.on === "boolean") {
       commentModeOn = data.on;
-      if (!commentModeOn) {
+      if (commentModeOn) {
+        ensureOverlay();
+      } else {
         cancelScheduledHover();
         clearHover();
+        removeOverlay();
+        pickInFlight = false;
       }
     } else if (data.type === "scrollTo" && typeof data.selector === "string") {
       var target = null;

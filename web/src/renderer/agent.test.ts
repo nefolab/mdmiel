@@ -136,9 +136,12 @@ describe('renderAgentScript', () => {
 
   it('re-resolves every anchor and reschedules a rects send on every observed mutation', () => {
     const script = renderAgentScript('n');
-    const match = script.match(/new MutationObserver\(function \(\) \{([\s\S]*?)\}\);/);
+    // The observer now receives MutationRecords to filter overlay-only changes.
+    const match = script.match(/new MutationObserver\(function \(records\) \{([\s\S]*?)\}\);/);
     expect(match).not.toBeNull();
     const body = match![1];
+    expect(body.indexOf('ensureOverlay();')).toBeLessThan(body.indexOf('isOverlayOnlyMutation(records, overlayEl)'));
+    expect(body.indexOf('isOverlayOnlyMutation(records, overlayEl)')).toBeLessThan(body.indexOf('resolveAll();'));
     expect(body).toContain('resolveAll();');
     expect(body).toContain('scheduleRects();');
   });
@@ -254,18 +257,122 @@ describe('M1: resolveOne text-hash fallback scan is capped', () => {
 });
 
 describe('L1: agent only sends "pick" while comment mode is armed', () => {
-  it('click handler bails out immediately when commentModeOn is false (no unconditional pick send)', () => {
+  it('guard bails out immediately when commentModeOn is false (no unconditional pick send)', () => {
     const script = renderAgentScript('n');
     expect(script).toContain('var commentModeOn = false;');
+    // Click handling moved into the shared capture guard with the other blocked inputs.
     expect(script).toMatch(
-      /document\.addEventListener\("click", function \(e\) \{\s*if \(!commentModeOn\) return;/
+      /function onGuardEvent\(e\) \{\s*if \(!commentModeOn\) return;/
     );
+    expect(script).not.toContain('document.addEventListener("click"');
   });
 
   it('flips commentModeOn from a parent {type:"commentMode", on} message', () => {
     const script = renderAgentScript('n');
     expect(script).toContain('data.type === "commentMode" && typeof data.on === "boolean"');
     expect(script).toContain('commentModeOn = data.on;');
+  });
+});
+
+describe('comment-mode overlay helpers', () => {
+  it('defines the important overlay styles and capture guards', () => {
+    const script = renderAgentScript('n');
+    expect(script).toContain('["position", "fixed"]');
+    expect(script).toContain('["inset", "0"]');
+    expect(script).toContain('["z-index", "2147483647"]');
+    expect(script).toContain('["touch-action", "none"]');
+    expect(script).toContain('style.setProperty(OVERLAY_STYLE[i][0], OVERLAY_STYLE[i][1], "important")');
+    expect(script).toContain('window.addEventListener(GUARD_EVENTS[guardIndex], onGuardEvent, { capture: true, passive: false })');
+    expect(script).toContain('document.addEventListener(GUARD_EVENTS[guardIndex], onGuardEvent, { capture: true, passive: false })');
+    expect(script).not.toContain('document.addEventListener("mouseover"');
+    expect(script).not.toContain('document.addEventListener("mouseout"');
+    expect(script).toContain('e.stopImmediatePropagation();');
+    expect(script).toContain('"pointermove", "dblclick", "auxclick"');
+    expect(script).toContain('"mousemove", "mouseover", "mouseout", "dragstart"');
+    expect(script).toContain('"dblclick", "auxclick", "contextmenu", "dragstart", "wheel", "touchmove"');
+    expect(script).not.toContain('"contextmenu", "touchstart", "wheel", "touchmove"]');
+  });
+
+  it('hitTest disables the overlay only while calling elementFromPoint', () => {
+    const script = renderAgentScript('n');
+    const hitTest = extractFunction(script, 'hitTest') as (overlay: Element | null, x: number, y: number) => Element | null;
+    const overlay = document.createElement('div');
+    const target = document.createElement('div');
+    const descriptor = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => {
+        expect(overlay.style.getPropertyValue('pointer-events')).toBe('none');
+        return target;
+      },
+    });
+    try {
+      expect(hitTest(overlay, 10, 20)).toBe(target);
+      expect(overlay.style.getPropertyValue('pointer-events')).toBe('auto');
+    } finally {
+      if (descriptor) Object.defineProperty(document, 'elementFromPoint', descriptor);
+      else Reflect.deleteProperty(document, 'elementFromPoint');
+    }
+  });
+
+  it('hitTest restores pointer-events when elementFromPoint throws', () => {
+    const script = renderAgentScript('n');
+    const hitTest = extractFunction(script, 'hitTest') as (overlay: Element | null, x: number, y: number) => Element | null;
+    const overlay = document.createElement('div');
+    const descriptor = Object.getOwnPropertyDescriptor(document, 'elementFromPoint');
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => { throw new Error('hit test failed'); },
+    });
+    try {
+      expect(hitTest(overlay, 10, 20)).toBeNull();
+      expect(overlay.style.getPropertyValue('pointer-events')).toBe('auto');
+    } finally {
+      if (descriptor) Object.defineProperty(document, 'elementFromPoint', descriptor);
+      else Reflect.deleteProperty(document, 'elementFromPoint');
+    }
+  });
+
+  it('filters pickable targets and overlay-only mutation records', () => {
+    const script = renderAgentScript('n');
+    const isOverlayHit = extractFunctionSource(script, 'isOverlayHit');
+    const isPickableTargetSrc = extractFunctionSource(script, 'isPickableTarget');
+    const nodeListHasOnlyOverlay = extractFunctionSource(script, 'nodeListHasOnlyOverlay');
+    const isOverlayOnlyMutationSrc = extractFunctionSource(script, 'isOverlayOnlyMutation');
+    // eslint-disable-next-line no-new-func
+    const helpers = new Function(`${isOverlayHit}\n${isPickableTargetSrc}\n${nodeListHasOnlyOverlay}\n${isOverlayOnlyMutationSrc}\nreturn { isPickableTarget: isPickableTarget, isOverlayOnlyMutation: isOverlayOnlyMutation };`)() as {
+      isPickableTarget: (el: Node | null, overlay: Element | null) => boolean;
+      isOverlayOnlyMutation: (records: unknown[], overlay: Element | null) => boolean;
+    };
+    const overlay = document.createElement('div');
+    const overlayChild = document.createElement('span');
+    overlay.appendChild(overlayChild);
+    const ordinary = document.createElement('div');
+    expect(helpers.isPickableTarget(null, overlay)).toBe(false);
+    expect(helpers.isPickableTarget(document.createTextNode('text'), overlay)).toBe(false);
+    expect(helpers.isPickableTarget(overlay, overlay)).toBe(false);
+    expect(helpers.isPickableTarget(overlayChild, overlay)).toBe(false);
+    expect(helpers.isPickableTarget(document.documentElement, overlay)).toBe(false);
+    expect(helpers.isPickableTarget(document.body, overlay)).toBe(false);
+    expect(helpers.isPickableTarget(ordinary, overlay)).toBe(true);
+
+    const overlayAttributes = { type: 'attributes', target: overlay };
+    const overlayChildList = { type: 'childList', target: document.documentElement, addedNodes: [overlay], removedNodes: [] };
+    const mockChildList = { type: 'childList', target: document.body, addedNodes: [ordinary], removedNodes: [] };
+    expect(helpers.isOverlayOnlyMutation([overlayAttributes], overlay)).toBe(true);
+    expect(helpers.isOverlayOnlyMutation([overlayChildList], overlay)).toBe(true);
+    expect(helpers.isOverlayOnlyMutation([overlayChildList, mockChildList], overlay)).toBe(false);
+    expect(helpers.isOverlayOnlyMutation([{ type: 'childList', target: overlay, addedNodes: [ordinary], removedNodes: [] }], overlay)).toBe(false);
+    expect(helpers.isOverlayOnlyMutation([overlayAttributes], null)).toBe(false);
+    expect(helpers.isOverlayOnlyMutation([], overlay)).toBe(false);
+  });
+
+  it('accepts only trusted click events with pointer detail for picking', () => {
+    const script = renderAgentScript('n');
+    const isPickEvent = extractFunction(script, 'isPickEvent') as (event: { isTrusted: boolean; detail: number }) => boolean;
+    expect(isPickEvent({ isTrusted: true, detail: 1 })).toBe(true);
+    expect(isPickEvent({ isTrusted: false, detail: 1 })).toBe(false);
+    expect(isPickEvent({ isTrusted: true, detail: 0 })).toBe(false);
   });
 });
 
