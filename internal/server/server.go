@@ -4,7 +4,9 @@ import (
 	"embed"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
+	"log/slog"
 	"math"
 	"mdmiel/internal/fsutil"
 	"mdmiel/internal/store"
@@ -26,22 +28,58 @@ type Server struct {
 	store               store.Store
 	hub                 *eventHub
 	startLiveReloadOnce sync.Once
+	logger              *slog.Logger // NewServerで必ず設定される ( 既定は slog.Default() )
+}
+
+// Option は NewServer の任意設定。検証が必要な設定 ( 将来の認証・公開Origin等 ) を
+// 追加できるよう error を返す形にしてある。
+type Option func(*Server) error
+
+// WithLogger は構造化ログの出力先を注入する。未指定なら slog.Default() を使う。
+func WithLogger(l *slog.Logger) Option {
+	return func(s *Server) error {
+		if l == nil {
+			return errors.New("WithLogger: logger must not be nil")
+		}
+		s.logger = l
+		return nil
+	}
 }
 
 // NewServer はrootDir配下を配信するmdmielサーバーを作る。
 // stは行コメントの永続化先 ( 通常はstore.NewFileStore(rootDir) ) を注入する。
-func NewServer(rootDir string, webDist embed.FS, st store.Store) (*Server, error) {
+func NewServer(rootDir string, webDist embed.FS, st store.Store, opts ...Option) (*Server, error) {
 	subFS, err := fs.Sub(webDist, "dist")
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	s := &Server{
 		rootDir: rootDir,
 		webDist: webDist,
 		subFS:   subFS,
 		store:   st,
 		hub:     newEventHub(),
-	}, nil
+		logger:  slog.Default(),
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			return nil, errors.New("server: nil option")
+		}
+		if err := opt(s); err != nil {
+			return nil, fmt.Errorf("server: apply option: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// internalError は500応答を返す。ボディには定型文だけを書き、元のエラー
+// ( rootDirの絶対パス等のOS情報を含みうる ) はログにのみ出力する。
+func (s *Server) internalError(w http.ResponseWriter, r *http.Request, err error) {
+	s.logger.ErrorContext(r.Context(), "request failed",
+		"method", r.Method,
+		"path", r.URL.Path,
+		"err", err)
+	http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 }
 
 // StartLiveReload starts forwarding watcher revisions to SSE subscribers.
@@ -279,7 +317,8 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		// walk関数はSkipDirかnilしか返さないため、現状この分岐には到達しない。
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -304,7 +343,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -314,7 +353,7 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -349,7 +388,7 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -360,7 +399,7 @@ func (s *Server) handleRaw(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 	if info.IsDir() {
@@ -412,7 +451,7 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 //
 // ResolveSecurePathは存在しないパスでも境界が安全なら解決済みパスを返すため、
 // 「実在するファイルにのみコメントを許可する」条件はここで明示的に担保する。
-func (s *Server) resolveTargetPath(w http.ResponseWriter, relPath string) (resolved string, ok bool) {
+func (s *Server) resolveTargetPath(w http.ResponseWriter, r *http.Request, relPath string) (resolved string, ok bool) {
 	resolved, err := ResolveSecurePath(s.rootDir, relPath)
 	if err != nil {
 		if errors.Is(err, ErrForbidden) {
@@ -423,7 +462,7 @@ func (s *Server) resolveTargetPath(w http.ResponseWriter, relPath string) (resol
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return "", false
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return "", false
 	}
 
@@ -432,7 +471,7 @@ func (s *Server) resolveTargetPath(w http.ResponseWriter, relPath string) (resol
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return "", false
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return "", false
 	}
 
@@ -447,13 +486,13 @@ func (s *Server) handleCommentsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, ok := s.resolveTargetPath(w, relPath); !ok {
+	if _, ok := s.resolveTargetPath(w, r, relPath); !ok {
 		return
 	}
 
 	comments, err := s.store.List(filepath.ToSlash(relPath))
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -475,7 +514,7 @@ func (s *Server) handleCommentsCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
-	if _, ok := s.resolveTargetPath(w, req.Path); !ok {
+	if _, ok := s.resolveTargetPath(w, r, req.Path); !ok {
 		return
 	}
 	if req.Body == "" {
@@ -500,7 +539,7 @@ func (s *Server) handleCommentsCreate(w http.ResponseWriter, r *http.Request) {
 		Links:  req.Links,
 	})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -524,7 +563,7 @@ func (s *Server) handleCommentGet(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -574,7 +613,7 @@ func (s *Server) handleCommentUpdate(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 
@@ -595,7 +634,7 @@ func (s *Server) handleCommentDelete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return
 		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		s.internalError(w, r, err)
 		return
 	}
 

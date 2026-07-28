@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"mdmiel/internal/fsutil"
 	"mdmiel/internal/server"
 	"mdmiel/internal/store"
@@ -19,6 +20,10 @@ import (
 )
 
 func main() {
+	// 未移行の log.Printf / log.Fatalf も同じ形式で出す ( Story 2/3 で解消 )。
+	// NewServer が slog.Default() を掴むため、この行は NewServer より前に置くこと。
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+
 	// サブコマンドは持たない ( 閲覧サーバーの起動が唯一の動作 )。機能追加はweb UI側で行う方針
 	fs := flag.NewFlagSet("mdmiel", flag.ExitOnError)
 	port := fs.String("port", "8686", "Port to bind HTTP server")
