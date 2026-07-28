@@ -2,7 +2,9 @@
 package watch
 
 import (
-	"log"
+	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,14 +24,48 @@ type Watcher struct {
 	events     chan int
 	done       chan struct{}
 	closeOnce  sync.Once
+	logger     *slog.Logger // Newで必ず設定される ( 既定は slog.Default() )
 }
 
-func New(root string, isExcluded func(name string) bool) (*Watcher, error) {
+// Option は New の任意設定。検証が必要な設定を追加できるよう error を返す形にしてある。
+type Option func(*Watcher) error
+
+// WithLogger は構造化ログの出力先を注入する。未指定なら slog.Default() を使う。
+func WithLogger(l *slog.Logger) Option {
+	return func(w *Watcher) error {
+		if l == nil {
+			return errors.New("WithLogger: logger must not be nil")
+		}
+		w.logger = l
+		return nil
+	}
+}
+
+func New(root string, isExcluded func(name string) bool, opts ...Option) (*Watcher, error) {
 	fsw, err := fsnotify.NewWatcher()
 	if err != nil {
 		return nil, err
 	}
-	w := &Watcher{fsw: fsw, root: root, isExcluded: isExcluded, events: make(chan int, 1), done: make(chan struct{})}
+	// OSリソース確保後にWatcherを組み立て、Optionを適用してから初回walkを行う。
+	// 注入ロガーが初回walkのログも受け取れるよう、この順序を変えないこと。
+	w := &Watcher{
+		fsw:        fsw,
+		root:       root,
+		isExcluded: isExcluded,
+		events:     make(chan int, 1),
+		done:       make(chan struct{}),
+		logger:     slog.Default(),
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			_ = fsw.Close()
+			return nil, errors.New("watch: nil option")
+		}
+		if err := opt(w); err != nil {
+			_ = fsw.Close()
+			return nil, fmt.Errorf("watch: apply option: %w", err)
+		}
+	}
 	w.addRecursive(root)
 	go w.loop()
 	return w, nil
@@ -40,7 +76,7 @@ func (w *Watcher) Events() <-chan int { return w.events }
 func (w *Watcher) addRecursive(root string) {
 	err := filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
 		if err != nil {
-			log.Printf("watch: walk %s: %v", p, err)
+			w.logger.Warn("watch: walk failed", "path", p, "err", err)
 			if d != nil && d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -53,12 +89,13 @@ func (w *Watcher) addRecursive(root string) {
 			return filepath.SkipDir
 		}
 		if err := w.fsw.Add(p); err != nil {
-			log.Printf("watch: add %s: %v", p, err)
+			w.logger.Warn("watch: add failed", "path", p, "err", err)
 		}
 		return nil
 	})
 	if err != nil {
-		log.Printf("watch: walk %s: %v", root, err)
+		// walk関数は SkipDir と nil しか返さないため、現状この分岐には到達しない。
+		w.logger.Warn("watch: walk aborted", "root", root, "err", err)
 	}
 }
 
@@ -126,7 +163,7 @@ func (w *Watcher) loop() {
 			if !ok {
 				return
 			}
-			log.Printf("watch: %v", err)
+			w.logger.Error("watch: watcher error", "root", w.root, "err", err)
 		case <-w.done:
 			return
 		}
