@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"log/slog"
 	"mdmiel/internal/fsutil"
 	"mdmiel/internal/server"
@@ -20,10 +19,20 @@ import (
 )
 
 func main() {
-	// 未移行の log.Printf / log.Fatalf も同じ形式で出す ( Story 2/3 で解消 )。
-	// NewServer が slog.Default() を掴むため、この行は NewServer より前に置くこと。
+	// server.NewServer と watch.New は構築時に slog.Default() を掴むため、
+	// SetDefault は run より前に呼ぶこと。順序を入れ替えると、それらだけが
+	// 既定ハンドラを掴んだまま静かに壊れる。
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, nil)))
+	os.Exit(run(os.Args[1:]))
+}
 
+// run は終了コードを返す。異常時はその場で理由をログに出し、1を返す。
+// ロガーは slog.Default() から取得するため、呼び出し前に SetDefault 済みであること。
+//
+// 不正フラグを渡すと flag.ExitOnError によりプロセスが exit 2 する。
+// 有効なディレクトリは ListenAndServe でブロックするため、テストから直接呼ぶ場合はどちらも渡してはならない。
+func run(args []string) int {
+	logger := slog.Default()
 	// サブコマンドは持たない ( 閲覧サーバーの起動が唯一の動作 )。機能追加はweb UI側で行う方針
 	fs := flag.NewFlagSet("mdmiel", flag.ExitOnError)
 	port := fs.String("port", "8686", "Port to bind HTTP server")
@@ -32,7 +41,7 @@ func main() {
 	// "mdmiel <dir> --port N" と "mdmiel --port N <dir>" の両形式に対応できるよう
 	// フラグと位置引数を事前に振り分けてから 1 回だけパースする
 	var flagArgs, posArgs []string
-	rest := os.Args[1:]
+	rest := args
 	for i := 0; i < len(rest); i++ {
 		arg := rest[i]
 		if strings.HasPrefix(arg, "-") {
@@ -49,40 +58,46 @@ func main() {
 	}
 
 	if err := fs.Parse(flagArgs); err != nil {
-		log.Fatalf("failed to parse flags: %v", err)
+		// flag.ExitOnError は Parse 内で exit 2 するため、この分岐には到達しない。
+		logger.Error("failed to parse flags", "err", err)
+		return 1
 	}
 
 	// 位置引数の確認
 	if len(posArgs) < 1 {
 		fmt.Fprintln(os.Stderr, "Error: directory is required")
 		printUsage()
-		os.Exit(1)
+		return 1
 	}
 
 	targetDir := posArgs[0]
 	absDir, err := filepath.Abs(targetDir)
 	if err != nil {
-		log.Fatalf("failed to get absolute path of directory: %v", err)
+		logger.Error("failed to resolve absolute path", "path", targetDir, "err", err)
+		return 1
 	}
 
 	// ディレクトリ存在チェック
 	info, err := os.Stat(absDir)
 	if err != nil {
-		log.Fatalf("failed to read directory: %v", err)
+		logger.Error("failed to read directory", "root", absDir, "err", err)
+		return 1
 	}
 	if !info.IsDir() {
-		log.Fatalf("path is not a directory: %s", absDir)
+		logger.Error("path is not a directory", "root", absDir)
+		return 1
 	}
 
 	// サーバーインスタンス生成 ( コメントはrootDir配下の.mdmiel/comments/にFileStoreで永続化 )
 	fileStore := store.NewFileStore(absDir)
 	srv, err := server.NewServer(absDir, web.Dist, fileStore)
 	if err != nil {
-		log.Fatalf("failed to create server: %v", err)
+		logger.Error("failed to create server", "root", absDir, "err", err)
+		return 1
 	}
 	w, err := watch.New(absDir, fsutil.IsExcludedDir)
 	if err != nil {
-		log.Printf("live reload disabled: %v", err)
+		logger.Warn("live reload disabled", "root", absDir, "err", err)
 	} else {
 		defer w.Close()
 		srv.StartLiveReload(w.Events())
@@ -93,19 +108,20 @@ func main() {
 	addr := fmt.Sprintf("127.0.0.1:%s", *port)
 	url := fmt.Sprintf("http://%s/", addr)
 
-	log.Printf("Starting mdmiel server on %s", url)
-	log.Printf("Serving files from: %s", absDir)
+	logger.Info("starting mdmiel server", "addr", addr, "url", url, "root", absDir)
 
 	// ブラウザ自動起動処理
 	go func() {
 		// サーバーの起動待ちのために少しスリープ
 		time.Sleep(100 * time.Millisecond)
-		openBrowser(url)
+		openBrowser(url, logger)
 	}()
 
 	if err := http.ListenAndServe(addr, handler); err != nil {
-		log.Fatalf("server stopped with error: %v", err)
+		logger.Error("server stopped with error", "addr", addr, "err", err)
+		return 1
 	}
+	return 0
 }
 
 func printUsage() {
@@ -113,7 +129,7 @@ func printUsage() {
 	fmt.Println("  mdmiel <dir> [--port 8686]")
 }
 
-func openBrowser(url string) {
+func openBrowser(url string, logger *slog.Logger) {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":
@@ -124,6 +140,6 @@ func openBrowser(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	if err := cmd.Start(); err != nil {
-		log.Printf("failed to open browser: %v", err)
+		logger.Warn("failed to open browser", "url", url, "err", err)
 	}
 }
