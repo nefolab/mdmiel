@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ViewState, generateHash } from '../lib/anchor';
 import { Comment, CommentAnchor, computeSnippet, snippetHash } from '../lib/comments';
 import { createComment } from '../lib/commentsApi';
@@ -155,6 +155,7 @@ export function SplitView({
   const rightContentRef = useRef<HTMLDivElement>(null);
   const leftIframeRef = useRef<HTMLIFrameElement>(null);
   const rightIframeRef = useRef<HTMLIFrameElement>(null);
+  const commentDraftRef = useRef<CommentDraft | null>(null);
   // Holds the pending auto-dismiss timer id for the toast, so a new showToast() call
   // clears any still-pending timer from a previous call instead of letting an earlier
   // timer clear a message that a later call just set.
@@ -164,6 +165,10 @@ export function SplitView({
   // of that effect for the same id (triggered by one of its many volatile deps changing)
   // doesn't scroll/flash a second time.
   const focusHandledIdRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    commentDraftRef.current = commentDraft;
+  }, [commentDraft]);
 
   const leftPath = viewState.path || viewState.left;
   const rightPath = viewState.right;
@@ -235,6 +240,24 @@ export function SplitView({
     containerRef: rightContentRef,
     onPick: handleRightPick,
   });
+
+  useEffect(() => {
+    if (!leftBridge.blocked) return;
+    setCommentDraft((prev) => {
+      if (prev?.pane !== 'left') return prev;
+      commentDraftRef.current = null;
+      return null;
+    });
+  }, [leftBridge.blocked]);
+
+  useEffect(() => {
+    if (!rightBridge.blocked) return;
+    setCommentDraft((prev) => {
+      if (prev?.pane !== 'right') return prev;
+      commentDraftRef.current = null;
+      return null;
+    });
+  }, [rightBridge.blocked]);
 
   // Load each pane's persisted view mode when its path changes (new file = re-check
   // localStorage; a path with no saved preference falls back to 'static').
@@ -668,8 +691,13 @@ export function SplitView({
       );
       onCommentAdded?.();
     } catch (err) {
+      const message = (err as Error).message;
+      if (commentDraftRef.current === null) {
+        showToast(`コメントの保存に失敗しました: ${message}`);
+        return;
+      }
       setCommentDraft((prev) =>
-        prev ? { ...prev, submitting: false, error: (err as Error).message } : prev
+        prev ? { ...prev, submitting: false, error: message } : prev
       );
     }
   };
@@ -787,7 +815,7 @@ export function SplitView({
             {leftData?.type === 'html' && (
               <AddCommentButton
                 armed={leftViewMode === 'live' ? leftBridge.armed : leftStaticPick.armed}
-                disabled={leftViewMode === 'static' ? leftStaticPick.disabled : undefined}
+                disabled={leftViewMode === 'live' ? !leftBridge.canComment : leftStaticPick.disabled}
                 onToggle={leftViewMode === 'live' ? leftBridge.toggleArmed : leftStaticPick.toggleArmed}
               />
             )}
@@ -803,6 +831,12 @@ export function SplitView({
           className={`pane-content ${leftData?.type === 'html' ? 'pane-content-iframe' : ''}`}
           onContextMenu={leftData?.type === 'markdown' ? (e) => handleMarkdownContextMenu(e, 'left') : undefined}
         >
+          {leftViewMode === 'live' && leftBridge.blocked && (
+            <div className="live-nav-guard-banner" role="status">
+              <span>モック内で画面遷移したためコメントを追加できません。</span>
+              <button type="button" onClick={leftBridge.reload}>このペインを再読込</button>
+            </div>
+          )}
           {leftError && <div style={{ padding: '16px', color: 'var(--color-danger)' }}>エラー: {leftError}</div>}
           {!leftError && leftData?.type === 'markdown' && (
             <div className="markdown-body" dangerouslySetInnerHTML={{ __html: leftData.renderedHtml }} />
@@ -835,6 +869,7 @@ export function SplitView({
               iframeRef={leftIframeRef}
               viewMode={leftData.type === 'html' ? leftViewMode : 'static'}
               liveRects={leftBridge.liveRects}
+              measured={leftBridge.measured}
               onCopyLink={showToast}
               flashCommentId={flashCommentId}
               onChanged={() => onCommentsChanged?.()}
@@ -859,7 +894,7 @@ export function SplitView({
               {rightData?.type === 'html' && (
                 <AddCommentButton
                   armed={rightViewMode === 'live' ? rightBridge.armed : rightStaticPick.armed}
-                  disabled={rightViewMode === 'static' ? rightStaticPick.disabled : undefined}
+                  disabled={rightViewMode === 'live' ? !rightBridge.canComment : rightStaticPick.disabled}
                   onToggle={rightViewMode === 'live' ? rightBridge.toggleArmed : rightStaticPick.toggleArmed}
                 />
               )}
@@ -873,6 +908,12 @@ export function SplitView({
             className={`pane-content ${rightData?.type === 'html' ? 'pane-content-iframe' : ''}`}
             onContextMenu={rightData?.type === 'markdown' ? (e) => handleMarkdownContextMenu(e, 'right') : undefined}
           >
+            {rightViewMode === 'live' && rightBridge.blocked && (
+              <div className="live-nav-guard-banner" role="status">
+                <span>モック内で画面遷移したためコメントを追加できません。</span>
+                <button type="button" onClick={rightBridge.reload}>このペインを再読込</button>
+              </div>
+            )}
             {rightError && <div style={{ padding: '16px', color: 'var(--color-danger)' }}>エラー: {rightError}</div>}
             {!rightError && rightData?.type === 'markdown' && (
               <div className="markdown-body" dangerouslySetInnerHTML={{ __html: rightData.renderedHtml }} />
@@ -905,6 +946,7 @@ export function SplitView({
                 iframeRef={rightIframeRef}
                 viewMode={rightData.type === 'html' ? rightViewMode : 'static'}
                 liveRects={rightBridge.liveRects}
+                measured={rightBridge.measured}
                 onCopyLink={showToast}
                 flashCommentId={flashCommentId}
                 onChanged={() => onCommentsChanged?.()}

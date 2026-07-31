@@ -39,6 +39,14 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   }
   ns.send = send;
 
+  var unloadSent = false;
+  window.addEventListener("pagehide", function (event) {
+    if (event && event.persisted) return;
+    if (unloadSent) return;
+    unloadSent = true;
+    send({ type: "unload" });
+  });
+
   function getSize() {
     var de = document.documentElement;
     var body = document.body;
@@ -125,6 +133,7 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   // 再計算する (scroll/resizeでは再解決しない = 安価)。MutationObserverはSPA再描画で要素の
   // アイデンティティが変わりうるため、発火のたびにresolveAll()からやり直す。
   var anchors = [];
+  var anchorsReceived = false;
   var resolvedMap = {};
 
   // querySelectorAll("*")によるテキストハッシュ総当たりフォールバックの走査上限。
@@ -210,6 +219,7 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
   }
 
   function sendRectsNow() {
+    if (!anchorsReceived) return;
     var rects = [];
     for (var i = 0; i < anchors.length; i++) {
       var a = anchors[i];
@@ -472,6 +482,7 @@ const AGENT_SCRIPT_TEMPLATE = `(function () {
       send({ type: "pong" });
     } else if (data.type === "anchors" && data.anchors && typeof data.anchors.length === "number") {
       anchors = data.anchors;
+      anchorsReceived = true;
       resolveAll();
       scheduleRects();
     } else if (data.type === "commentMode" && typeof data.on === "boolean") {

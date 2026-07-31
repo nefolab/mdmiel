@@ -47,6 +47,8 @@ export interface StickyNoteLayerProps {
   viewMode?: 'static' | 'live';
   /** Latest BridgeResolver measurement per comment id. Only consulted when viewMode === 'live'. */
   liveRects?: Record<string, LiveRect>;
+  /** Whether the current live document has delivered its first rects measurement. */
+  measured?: boolean;
   /** Called with a user-facing status message after a card's "リンクをコピー" succeeds. */
   onCopyLink?: (message: string) => void;
   /** Comment id to briefly flash-highlight (e.g. after following a /#/comment/<id> link). */
@@ -74,11 +76,13 @@ export function StickyNoteLayer({
   iframeRef,
   viewMode = 'static',
   liveRects,
+  measured = true,
   onCopyLink,
   flashCommentId,
   onChanged,
   onUnresolvedChange,
 }: StickyNoteLayerProps) {
+  const deferred = viewMode === 'live' && measured === false;
   const allPlacements = useMemo(
     () => resolvePlacements(comments, content),
     [comments, content]
@@ -95,6 +99,7 @@ export function StickyNoteLayer({
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const measure = useCallback(() => {
+    if (deferred) return;
     const container = containerRef.current;
     if (!container) return;
 
@@ -177,7 +182,7 @@ export function StickyNoteLayer({
     }
     setPositions(next);
     setMissingIds(raw.filter((r) => !r.present).map((r) => r.id));
-  }, [candidates, type, containerRef, iframeRef, viewMode, liveRects]);
+  }, [candidates, type, containerRef, iframeRef, viewMode, liveRects, deferred]);
 
   useLayoutEffect(() => {
     // Initial synchronous measure so notes are positioned on first paint.
@@ -270,24 +275,33 @@ export function StickyNoteLayer({
   // remeasure even when its contents didn't change) doesn't re-notify the parent — that
   // would otherwise call setState upstream (App's unresolvedByPane) on every scroll/resize.
   const lastNotifiedIdsRef = useRef<string[]>([]);
+  // deferred 中に報告を保留した事実だけを記録し、解除時は ids が直前の確定報告と
+  // 同一でも再通知する。lastNotifiedIdsRef 自体は deferred 中に変更しない。
+  const deferredNotificationPendingRef = useRef(false);
 
   // onUnresolvedChange is intentionally omitted from the deps array: it's typically a
   // fresh inline closure on every parent render (see the analogous onPaneContentChange
   // effects in SplitView), so depending on its identity would re-notify the parent on
   // every unrelated re-render instead of only when the unresolved set itself changes.
   useEffect(() => {
+    if (deferred) {
+      deferredNotificationPendingRef.current = true;
+      return;
+    }
+    const resumed = deferredNotificationPendingRef.current;
+    deferredNotificationPendingRef.current = false;
     const prev = lastNotifiedIdsRef.current;
     const unchanged =
       prev.length === unresolvedIds.length && prev.every((id, i) => id === unresolvedIds[i]);
-    if (unchanged) return;
+    if (unchanged && !resumed) return;
     lastNotifiedIdsRef.current = unresolvedIds;
     onUnresolvedChange?.(unresolvedIds);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unresolvedIds]);
+  }, [unresolvedIds, deferred]);
 
   return (
     <>
-      {placed.map((p) => {
+      {!deferred && placed.map((p) => {
         const pos = positions[p.comment.id];
         if (!pos || !pos.visible) return null;
         return (

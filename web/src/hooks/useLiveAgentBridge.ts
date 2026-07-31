@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Comment } from '../lib/comments';
 import { ViewMode } from '../lib/viewMode';
 import { LiveRect } from '../components/StickyNoteLayer';
@@ -38,6 +38,12 @@ export interface UseLiveAgentBridgeResult {
   agentReady: boolean;
   /** Latest BridgeResolver measurement per comment id, from the agent's "rects" messages. */
   liveRects: Record<string, LiveRect>;
+  /** True once the current agent instance has delivered its first rects measurement. */
+  measured: boolean;
+  /** True after the current live document has started leaving via page navigation. */
+  blocked: boolean;
+  /** Whether this pane may currently enter comment placement mode. */
+  canComment: boolean;
   /** Whether the next "pick" from the agent should open the comment composer. */
   armed: boolean;
   setArmed: React.Dispatch<React.SetStateAction<boolean>>;
@@ -46,6 +52,8 @@ export interface UseLiveAgentBridgeResult {
   sendAnchors: () => void;
   /** Asks the agent to scroll a selector into view (used by comment-link navigation). */
   sendScrollTo: (selector: string) => void;
+  /** Remounts the current live iframe with a fresh bridge nonce. */
+  reload: () => void;
 }
 
 /**
@@ -69,10 +77,22 @@ export function useLiveAgentBridge<T extends PaneDataLike>({
   containerRef,
   onPick,
 }: UseLiveAgentBridgeParams<T>): UseLiveAgentBridgeResult {
+  // Phase 1 navigation-guard state. This generation tracking is intentionally temporary;
+  // Phase 2 will move it into the live-session reducer.
+  const [reloadKey, setReloadKey] = useState(0);
+  const [measured, setMeasured] = useState(false);
+  const blockedNonceRef = useRef('');
+  const [blockedNonce, setBlockedNonce] = useState('');
+
   // Regenerated whenever the pane switches to a new path or (re-)enters live mode, so each
   // fresh agent instance gets its own nonce; the iframe is remounted (key change) in
   // lockstep via viewMode+nonce by the caller.
-  const nonce = useMemo(() => (viewMode === 'live' && path ? crypto.randomUUID() : ''), [viewMode, path, revision]);
+  const nonce = useMemo(
+    () => (viewMode === 'live' && path ? crypto.randomUUID() : ''),
+    [viewMode, path, revision, reloadKey]
+  );
+  const blocked = blockedNonce !== '' && blockedNonce === nonce;
+  const canComment = viewMode === 'live' ? !blocked : true;
 
   const [agentReady, setAgentReady] = useState(false);
   const [liveRects, setLiveRects] = useState<Record<string, LiveRect>>({});
@@ -83,17 +103,26 @@ export function useLiveAgentBridge<T extends PaneDataLike>({
   // state) without re-adding the listener every time mode/nonce/armed changes.
   const bridgeRef = useRef<{ nonce: string; path: string; armed: boolean } | undefined>(undefined);
 
-  useEffect(() => {
+  // useLayoutEffect 必須。iframe は nonce が変わる同じ commit でマウントされるため、
+  // paint 後の useEffect では新文書が即 location.href を書き換えた際の unload を旧 nonce の
+  // bridgeRef で拒否しうる。特に blocked からの reload() では旧 nonce が
+  // blockedNonceRef と一致し、新文書のメッセージまで冒頭ガードで破棄されて無言失敗へ戻る。
+  // この effect を useEffect に戻してはならない。
+  useLayoutEffect(() => {
     bridgeRef.current = viewMode === 'live' && nonce && data ? { nonce, path: data.path, armed } : undefined;
   }, [viewMode, nonce, data, armed]);
 
   // Resets stale bridge state whenever a fresh agent instance is about to mount (new nonce
   // = new iframe key), so a leftover "ready"/rects/armed from a previous agent never leaks
   // into the new one.
-  useEffect(() => {
+  // こちらも iframe の同一 commit でのマウントより後、paint より前に同期リセットする必要がある。
+  // useEffect に戻すと、即時遷移した新文書の unload を旧世代の状態と blockedNonceRef で扱い、
+  // 新 nonce のメッセージを破棄しうるため、必ず useLayoutEffect のままにする。
+  useLayoutEffect(() => {
     setAgentReady(false);
     setLiveRects({});
     setArmed(false);
+    setMeasured(false);
   }, [nonce]);
 
   // onPick may be a fresh closure every render (the caller isn't required to memoize it);
@@ -112,6 +141,7 @@ export function useLiveAgentBridge<T extends PaneDataLike>({
     const handleMessage = (event: MessageEvent) => {
       const bridge = bridgeRef.current;
       if (!bridge) return;
+      if (blockedNonceRef.current && blockedNonceRef.current === bridge.nonce) return;
       const iframe = iframeRef.current;
       if (!iframe || event.source !== iframe.contentWindow) return;
 
@@ -122,6 +152,7 @@ export function useLiveAgentBridge<T extends PaneDataLike>({
         setAgentReady(true);
       } else if (message.type === 'rects') {
         setLiveRects(buildLiveRectsMap(message.rects));
+        setMeasured(true);
       } else if (message.type === 'pick' && bridge.armed) {
         const container = containerRef.current;
         if (!container) return;
@@ -137,6 +168,12 @@ export function useLiveAgentBridge<T extends PaneDataLike>({
           snippetHash: message.payload.snippetHash,
         });
         setArmed(false);
+      } else if (message.type === 'unload') {
+        blockedNonceRef.current = bridge.nonce;
+        setBlockedNonce(bridge.nonce);
+        setAgentReady(false);
+        setArmed(false);
+        setMeasured(false);
       }
     };
     window.addEventListener('message', handleMessage);
@@ -179,6 +216,20 @@ export function useLiveAgentBridge<T extends PaneDataLike>({
   };
 
   const toggleArmed = () => setArmed((v) => !v);
+  const reload = () => setReloadKey((v) => v + 1);
 
-  return { nonce, agentReady, liveRects, armed, setArmed, toggleArmed, sendAnchors, sendScrollTo };
+  return {
+    nonce,
+    agentReady,
+    liveRects,
+    measured,
+    blocked,
+    canComment,
+    armed,
+    setArmed,
+    toggleArmed,
+    sendAnchors,
+    sendScrollTo,
+    reload,
+  };
 }

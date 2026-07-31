@@ -3,13 +3,14 @@
  * protocol. Extracted from SplitView (and now hooks/useLiveAgentBridge) so the message
  * validation/shaping logic can be unit-tested without mounting React or an iframe.
  *
- * Wire protocol (unchanged from the original SplitView implementation):
+ * Wire protocol:
  * - parent -> agent: { mdmiel: true, nonce, type: 'anchors', anchors }
  *                     { mdmiel: true, nonce, type: 'commentMode', on }
  *                     { mdmiel: true, nonce, type: 'scrollTo', selector }
  * - agent -> parent: { mdmiel: true, nonce, type: 'ready' }
  *                     { mdmiel: true, nonce, type: 'rects', rects }
  *                     { mdmiel: true, nonce, type: 'pick', selector, snippet, snippetHash, rect }
+ *                     { mdmiel: true, nonce, type: 'unload' }
  */
 import { Comment } from './comments';
 import { LiveRect } from '../components/StickyNoteLayer';
@@ -91,7 +92,8 @@ export function parsePickPayload(data: Record<string, unknown>): PickPayload | n
 export type IncomingAgentMessage =
   | { type: 'ready' }
   | { type: 'rects'; rects: unknown[] }
-  | { type: 'pick'; payload: PickPayload };
+  | { type: 'pick'; payload: PickPayload }
+  | { type: 'unload' };
 
 /**
  * Validates a raw postMessage event's `data` against the expected nonce and returns its
@@ -105,6 +107,7 @@ export function parseIncomingMessage(data: unknown, expectedNonce: string): Inco
   if (d.mdmiel !== true || d.nonce !== expectedNonce) return null;
 
   if (d.type === 'ready') return { type: 'ready' };
+  if (d.type === 'unload') return { type: 'unload' };
   if (d.type === 'rects' && Array.isArray(d.rects)) return { type: 'rects', rects: d.rects };
   if (d.type === 'pick') {
     const payload = parsePickPayload(d);
