@@ -1,14 +1,21 @@
 import { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Comment, computeSnippet, snippetHash } from '../lib/comments';
+import { ViewState } from '../lib/anchor';
 import { SplitView } from './SplitView';
 
-vi.mock('./StickyNoteLayer', () => ({ StickyNoteLayer: () => null }));
+vi.mock('./StickyNoteLayer', () => ({
+  StickyNoteLayer: ({ flashCommentId }: { flashCommentId?: string | null }) => (
+    <div className="sticky-note-probe" data-flash-comment-id={flashCommentId ?? ''} />
+  ),
+}));
 
 let root: Root | undefined;
 let mount: HTMLDivElement | undefined;
 let sequence = 0;
 let resolveCreate: ((response: Response) => void) | undefined;
+const originalScrollIntoView = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
 
 function successfulJson(value: unknown): Response {
   return {
@@ -19,9 +26,6 @@ function successfulJson(value: unknown): Response {
 }
 
 async function renderSplit(right = true) {
-  mount = document.createElement('div');
-  document.body.append(mount);
-  root = createRoot(mount);
   await act(async () => {
     root?.render(
       <SplitView
@@ -66,6 +70,9 @@ function openComposer(paneIndex: number) {
 }
 
 beforeEach(() => {
+  mount = document.createElement('div');
+  document.body.append(mount);
+  root = createRoot(mount);
   sequence = 0;
   resolveCreate = undefined;
   localStorage.clear();
@@ -98,6 +105,13 @@ afterEach(() => {
   mount?.remove();
   mount = undefined;
   localStorage.clear();
+  if (originalScrollIntoView) {
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoView);
+  } else {
+    delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+  }
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
@@ -156,5 +170,153 @@ describe('SplitView live navigation guard', () => {
     expect(mount!.querySelector('.toast')?.textContent).toBe(
       'コメントの保存に失敗しました: storage unavailable'
     );
+  });
+});
+
+const source = '# Target';
+
+function focusComment(body = 'focus body'): Comment {
+  const snippet = computeSnippet(source);
+  return {
+    version: 1,
+    id: 'focus-id',
+    path: 'target.md',
+    anchor: { line: 1, snippet, snippetHash: snippetHash(snippet) },
+    body,
+    author: 'test',
+    createdAt: '2026-08-02T00:00:00Z',
+    resolved: false,
+  };
+}
+
+function installMarkdownStubs() {
+  Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+    configurable: true,
+    value: vi.fn(),
+  });
+  vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const url = String(input);
+    const path = decodeURIComponent(url.slice('/api/file?path='.length));
+    return Promise.resolve(successfulJson({
+      path,
+      type: 'markdown',
+      content: source,
+    }));
+  }));
+}
+
+function scheduledScrollCount(calls: readonly (readonly unknown[])[]): number {
+  return calls.filter((call) => call[1] === 150).length;
+}
+
+async function renderFocusedSplitView(
+  focusCommentId: string | undefined,
+  comments: Comment[],
+  onFocusHandled: () => void
+) {
+  await act(async () => {
+    root?.render(
+      <SplitView
+        revision={1}
+        viewState={{ path: 'target.md' }}
+        onClosePane={() => {}}
+        leftComments={comments}
+        focusCommentId={focusCommentId}
+        onFocusHandled={onFocusHandled}
+      />
+    );
+    await Promise.resolve();
+  });
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+describe('SplitView line navigation', () => {
+  it.each([
+    {
+      name: 'left',
+      viewState: { left: 'left.md', leftLine: 1, right: 'right.md' } satisfies ViewState,
+    },
+    {
+      name: 'right',
+      viewState: { left: 'left.md', right: 'right.md', rightLine: 1 } satisfies ViewState,
+    },
+  ])('scrolls the $name pane again when navNonce changes for the same line', async ({ viewState }) => {
+    vi.useFakeTimers();
+    installMarkdownStubs();
+    const scrollIntoView = HTMLElement.prototype.scrollIntoView as ReturnType<typeof vi.fn>;
+
+    await act(async () => {
+      root?.render(
+        <SplitView
+          revision={1}
+          viewState={viewState}
+          navNonce={1}
+          onClosePane={() => {}}
+        />
+      );
+      await Promise.resolve();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    act(() => vi.advanceTimersByTime(150));
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      root?.render(
+        <SplitView
+          revision={1}
+          viewState={viewState}
+          navNonce={2}
+          onClosePane={() => {}}
+        />
+      );
+    });
+    act(() => vi.advanceTimersByTime(150));
+
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SplitView comment focus guard', () => {
+  it('runs again for the same id after focusCommentId returns to null', async () => {
+    vi.useFakeTimers();
+    installMarkdownStubs();
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+    const onFocusHandled = vi.fn();
+    const comments = [focusComment()];
+
+    await renderFocusedSplitView('focus-id', comments, onFocusHandled);
+    expect(onFocusHandled).toHaveBeenCalledTimes(1);
+    expect(mount!.querySelector('[data-flash-comment-id="focus-id"]')).not.toBeNull();
+    expect(mount!.querySelector('[data-source-line="1"]')).not.toBeNull();
+    expect(scheduledScrollCount(setTimeoutSpy.mock.calls)).toBe(1);
+
+    await renderFocusedSplitView(undefined, comments, onFocusHandled);
+    act(() => vi.advanceTimersByTime(3000));
+    expect(mount!.querySelector('[data-flash-comment-id="focus-id"]')).toBeNull();
+
+    await renderFocusedSplitView('focus-id', comments, onFocusHandled);
+    expect(onFocusHandled).toHaveBeenCalledTimes(2);
+    expect(mount!.querySelector('[data-flash-comment-id="focus-id"]')).not.toBeNull();
+    expect(scheduledScrollCount(setTimeoutSpy.mock.calls)).toBe(2);
+  });
+
+  it('does not run again while the same id remains focused and another dependency changes', async () => {
+    vi.useFakeTimers();
+    installMarkdownStubs();
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout');
+    const onFocusHandled = vi.fn();
+
+    await renderFocusedSplitView('focus-id', [focusComment()], onFocusHandled);
+    expect(mount!.querySelector('[data-source-line="1"]')).not.toBeNull();
+    expect(onFocusHandled).toHaveBeenCalledTimes(1);
+    expect(scheduledScrollCount(setTimeoutSpy.mock.calls)).toBe(1);
+
+    await renderFocusedSplitView('focus-id', [focusComment('changed dependency')], onFocusHandled);
+    expect(onFocusHandled).toHaveBeenCalledTimes(1);
+    expect(scheduledScrollCount(setTimeoutSpy.mock.calls)).toBe(1);
   });
 });

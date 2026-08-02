@@ -26,6 +26,8 @@ export interface PaneContentInfo {
 export interface SplitViewProps {
   revision: number;
   viewState: ViewState;
+  /** Increments for every processed view-route navigation, including same-hash revisits. */
+  navNonce?: number;
   onClosePane: (pane: 'left' | 'right') => void;
   onPaneContentChange?: (pane: 'left' | 'right', data: PaneContentInfo | null) => void;
   onCommentAdded?: () => void;
@@ -125,6 +127,7 @@ function AddCommentButton({ armed, disabled, onToggle }: AddCommentButtonProps) 
 export function SplitView({
   viewState,
   revision,
+  navNonce,
   onClosePane,
   onPaneContentChange,
   onCommentAdded,
@@ -435,7 +438,7 @@ export function SplitView({
         return () => clearTimeout(timer);
       }
     }
-  }, [leftData, viewState.line, viewState.leftLine]);
+  }, [leftData, viewState.line, viewState.leftLine, navNonce]);
 
   // Scroll right pane when target line changes
   useEffect(() => {
@@ -445,7 +448,7 @@ export function SplitView({
       }, 150);
       return () => clearTimeout(timer);
     }
-  }, [rightData, viewState.rightLine]);
+  }, [rightData, viewState.rightLine, navNonce]);
 
   // Comment-link navigation (App resolved "#/comment/<id>" -> getComment -> redirected here
   // via "#/view?path=<comment.path>" + focusCommentId): once the target comment's pane and
@@ -454,7 +457,10 @@ export function SplitView({
   // comment being viewed in a static pane, DirectDomResolver's selector lookup); a live pane
   // instead asks its agent to scroll via the "scrollTo" postMessage.
   useEffect(() => {
-    if (!focusCommentId) return;
+    if (!focusCommentId) {
+      focusHandledIdRef.current = null;
+      return;
+    }
     // One-shot guard: this effect's dependency list includes several values (comments
     // lists, agent-ready flags, nonces, ...) that can legitimately change more than once
     // while focusCommentId itself stays the same (e.g. App hasn't committed the
