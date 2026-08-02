@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Comment } from '../lib/comments';
 import { resolvePlacements, collectUnresolvedComments, UnresolvedIdsByPane } from '../lib/stickyLayout';
 import { useCommentActions } from '../lib/useCommentActions';
+import { CommentBody } from './CommentBody';
 
 export interface CommentSidebarPaneInfo {
   pane: 'left' | 'right';
@@ -128,7 +129,9 @@ export function CommentSidebar({
             </div>
           </div>
         ) : (
-          <div className="comment-item-body">{comment.body}</div>
+          <div className="comment-item-body">
+            <CommentBody body={comment.body} />
+          </div>
         )}
 
         <div className="comment-item-footer">

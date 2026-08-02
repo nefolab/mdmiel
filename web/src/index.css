@@ -889,6 +889,16 @@ body {
   word-break: break-word;
 }
 
+.comment-body-link {
+  color: var(--color-accent);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.comment-body-link:hover {
+  color: var(--color-accent-hover);
+}
+
 .comment-item-footer {
   display: flex;
   justify-content: space-between;

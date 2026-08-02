@@ -12,6 +12,7 @@ import {
   NoteOffset,
 } from '../lib/stickyLayout';
 import { useCommentActions } from '../lib/useCommentActions';
+import { CommentBody } from './CommentBody';
 
 /** Pointer movement (px) beyond which a pointerdown->pointerup is treated as a drag rather than a click. */
 const DRAG_THRESHOLD = 4;
@@ -521,7 +522,9 @@ function StickyNote({
 
       {expanded && !editing && (
         <div className="sticky-note-content">
-          <div className="sticky-note-body">{comment.body}</div>
+          <div className="sticky-note-body">
+            <CommentBody body={comment.body} />
+          </div>
           <div className="sticky-note-actions" onClick={(e) => e.stopPropagation()}>
             <button
               className="sticky-note-btn-resolve"

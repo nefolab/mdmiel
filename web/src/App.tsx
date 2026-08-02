@@ -13,6 +13,7 @@ import { useLiveReload } from './lib/liveReload';
 export default function App() {
   const revision = useLiveReload();
   const [viewState, setViewState] = useState<ViewState>(() => parseHash(window.location.hash));
+  const [navNonce, setNavNonce] = useState(0);
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
   const [commentsRefreshKey, setCommentsRefreshKey] = useState(0);
@@ -75,6 +76,7 @@ export default function App() {
         return;
       }
       setViewState(parseHash(hash));
+      setNavNonce((value) => value + 1);
     };
     processHash();
     window.addEventListener('hashchange', processHash);
@@ -268,6 +270,7 @@ export default function App() {
         <SplitView
           revision={revision}
           viewState={viewState}
+          navNonce={navNonce}
           onClosePane={handleClosePane}
           onPaneContentChange={handlePaneContentChange}
           onCommentAdded={handleCommentAdded}
