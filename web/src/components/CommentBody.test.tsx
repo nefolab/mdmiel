@@ -102,6 +102,28 @@ describe('CommentBody', () => {
     window.removeEventListener('hashchange', onHashChange);
   });
 
+  // The synthetic event above only covers the same-hash case. For a different hash the
+  // navigation depends on assigning window.location.hash and letting the browser fire
+  // hashchange on its own — swap that assignment for history.replaceState and App would
+  // never hear about the click. jsdom queues the event, hence the await.
+  it('lets the browser fire hashchange when an internal link targets a different hash', async () => {
+    window.history.replaceState({}, '', '#/view?path=other.md');
+    // Earlier tests change the hash synchronously and never await, so their queued
+    // hashchange events are still pending. Drain them before the spy goes on.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const targetHash = '#/view?path=a.md&line=42';
+    renderCommentBody(`${window.location.origin}/${targetHash}`);
+    const onHashChange = vi.fn();
+    window.addEventListener('hashchange', onHashChange);
+
+    clickLink(mount.querySelector<HTMLAnchorElement>('a')!);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(window.location.hash).toBe(targetHash);
+    expect(onHashChange).toHaveBeenCalledTimes(1);
+    window.removeEventListener('hashchange', onHashChange);
+  });
+
   it('leaves a modified internal click to the browser', () => {
     const url = `${window.location.origin}/#/comment/abc`;
     renderCommentBody(url);
