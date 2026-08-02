@@ -144,6 +144,14 @@ describe('parseIncomingMessage', () => {
     expect(parseIncomingMessage({ mdmiel: true, nonce, type: 'ready' }, nonce)).toEqual({ type: 'ready' });
   });
 
+  it('parses an unload message', () => {
+    expect(parseIncomingMessage({ mdmiel: true, nonce, type: 'unload' }, nonce)).toEqual({ type: 'unload' });
+  });
+
+  it('rejects an unload message with a mismatched nonce', () => {
+    expect(parseIncomingMessage({ mdmiel: true, nonce: 'other', type: 'unload' }, nonce)).toBeNull();
+  });
+
   it('parses a rects message with an array payload', () => {
     const rects = [{ id: 'a', found: false }];
     expect(parseIncomingMessage({ mdmiel: true, nonce, type: 'rects', rects }, nonce)).toEqual({

@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { renderAgentScript } from './agent';
 
-function waitForMutations() {
-  return new Promise((resolve) => setTimeout(resolve, 30));
+async function waitForMutations() {
+  // MutationObserver をmicrotask checkpointで配信し、agentが予約したrAFを明示的に
+  // 通過してから、postMessageのtaskまでflushする。固定時間待ちに依存しない。
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 function sendCommentMode(nonce: string, on: boolean) {
@@ -201,6 +205,70 @@ describe('comment-mode overlay lifecycle', () => {
       sendCommentMode(nonce, false);
       if (descriptor) Object.defineProperty(document, 'elementFromPoint', descriptor);
       else Reflect.deleteProperty(document, 'elementFromPoint');
+    }
+  });
+});
+
+describe('live navigation guard protocol', () => {
+  it('ignores persisted pagehide without consuming the one-shot unload notification', async () => {
+    const nonce = 'navigation-unload-1';
+    const unloads: unknown[] = [];
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.nonce === nonce && event.data?.type === 'unload') unloads.push(event.data);
+    };
+    window.addEventListener('message', onMessage);
+    try {
+      runAgent(nonce);
+      window.dispatchEvent(new Event('beforeunload'));
+      await waitForMutations();
+      expect(unloads).toHaveLength(0);
+
+      const persistedPagehide = new Event('pagehide');
+      Object.defineProperty(persistedPagehide, 'persisted', { value: true });
+      window.dispatchEvent(persistedPagehide);
+      await waitForMutations();
+      expect(unloads).toHaveLength(0);
+
+      const discardedPagehide = new Event('pagehide');
+      Object.defineProperty(discardedPagehide, 'persisted', { value: false });
+      window.dispatchEvent(discardedPagehide);
+      window.dispatchEvent(new Event('pagehide'));
+      await waitForMutations();
+      expect(unloads).toEqual([{ mdmiel: true, nonce, type: 'unload' }]);
+    } finally {
+      window.removeEventListener('message', onMessage);
+    }
+  });
+
+  it('does not send rects from mutations, scroll, or resize before the first anchors message', async () => {
+    const nonce = 'anchors-gate-2';
+    const rectMessages: unknown[] = [];
+    const onMessage = (event: MessageEvent) => {
+      if (event.data?.nonce === nonce && event.data?.type === 'rects') rectMessages.push(event.data);
+    };
+    window.addEventListener('message', onMessage);
+    try {
+      runAgent(nonce);
+      // Pin the simulated parent origin before jsdom loops the agent's own ready
+      // postMessage back onto the same Window (real iframe and parent are distinct).
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { nonce, type: 'ping' },
+        origin: window.location.origin,
+      }));
+      document.body.setAttribute('data-before-anchors', 'changed');
+      window.dispatchEvent(new Event('scroll'));
+      window.dispatchEvent(new Event('resize'));
+      await waitForMutations();
+      expect(rectMessages).toHaveLength(0);
+
+      window.dispatchEvent(new MessageEvent('message', {
+        data: { nonce, type: 'anchors', anchors: [] },
+        origin: window.location.origin,
+      }));
+      await waitForMutations();
+      expect(rectMessages).toEqual([{ mdmiel: true, nonce, type: 'rects', rects: [] }]);
+    } finally {
+      window.removeEventListener('message', onMessage);
     }
   });
 });
