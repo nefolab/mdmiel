@@ -45,8 +45,8 @@ func UserFrom(ctx context.Context) (User, bool) {
 
 // IsLoopbackAddr はIPリテラルのバインドアドレスがループバックかを判定する。
 // DNS解決は行わず、解析できない入力はすべてfalseを返すfail-closedな判定である。
-// IPv4-mapped IPv6は、その表記でバインドしても実効的にIPv4の127.0.0.1へ束縛され、
-// ループバック限定が保たれるためループバックとして扱う。
+// IPv4-mapped IPv6は、netip.Addr.IsLoopbackが埋め込まれたIPv4の127/8を
+// ループバックとして判定するため、ループバックとして扱う。
 func IsLoopbackAddr(addr string) bool {
 	if addrPort, err := netip.ParseAddrPort(addr); err == nil {
 		return addrPort.Addr().IsLoopback()
