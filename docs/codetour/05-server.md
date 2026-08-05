@@ -1,55 +1,91 @@
-# 05. HTTPサーバーとAPI — internal/server/server.go ( 540行 )
+# 05. HTTPサーバーとAPI — internal/server/server.go ( 689行 )
 
-`Server` structとそのHandler()、ファイル一覧・本文取得・コメントCRUDの各APIハンドラ、そしてSPA配信をまとめて読む。540行あるため全文は載せず、要所を抜粋する形で進める。
+`Server` structとそのHandler()、ファイル一覧・本文取得・コメントCRUDの各APIハンドラ、そしてSPA配信をまとめて読む。689行あるため全文は載せず、要所を抜粋する形で進める。
 
 この章のゴール。
 
 - Go 1.22+のメソッド付きルーティングパターン ( `mux.HandleFunc("GET /api/files", ...)` ) と `{id...}` ワイルドカードの意味を説明できる
 - `Handler()` が返すラップ関数がミドルウェアとして何を検証しているか、04章のパス対策とどう役割分担しているか説明できる
+- 可変長引数のOptionパターンで、既存の呼び出しを壊さずに設定を足せる仕組みを説明できる
 - ポインタフィールドを持つリクエスト構造体 ( `updateCommentRequest` ) が、02章のStore interfaceのboolフラグ群にどう変換されるか追える
 
 ## 1. NewServerとHandler(): ルーティング
 
 ```go
 type Server struct {
-	rootDir string
-	webDist embed.FS
-	subFS   fs.FS
-	store   store.Store
+	rootDir             string
+	webDist             embed.FS
+	subFS               fs.FS
+	store               store.Store
+	hub                 *eventHub
+	startLiveReloadOnce sync.Once
+	logger              *slog.Logger // NewServerで必ず設定される ( 既定は slog.Default() )
+	authMW              auth.Middleware
 }
+
+// Option は NewServer の任意設定。検証が必要な設定 ( 将来の認証・公開Origin等 ) を
+// 追加できるよう error を返す形にしてある。
+type Option func(*Server) error
 
 // NewServer はrootDir配下を配信するmdmielサーバーを作る。
 // stは行コメントの永続化先 ( 通常はstore.NewFileStore(rootDir) ) を注入する。
-func NewServer(rootDir string, webDist embed.FS, st store.Store) (*Server, error) {
+func NewServer(rootDir string, webDist embed.FS, st store.Store, opts ...Option) (*Server, error) {
 	subFS, err := fs.Sub(webDist, "dist")
 	if err != nil {
 		return nil, err
 	}
-	return &Server{
+	s := &Server{
 		rootDir: rootDir,
 		webDist: webDist,
 		subFS:   subFS,
 		store:   st,
-	}, nil
+		hub:     newEventHub(),
+		logger:  slog.Default(),
+	}
+	for _, opt := range opts {
+		if opt == nil {
+			return nil, errors.New("server: nil option")
+		}
+		if err := opt(s); err != nil {
+			return nil, fmt.Errorf("server: apply option: %w", err)
+		}
+	}
+	return s, nil
 }
 ```
 
 ```go
+// serverRoutes は Handler が mux に登録する全ルートの定義元。
+var serverRoutes = []serverRoute{
+	{pattern: "GET /api/files", handler: (*Server).handleFiles},
+	{pattern: "GET /api/file", handler: (*Server).handleFile},
+	{pattern: "GET /api/events", handler: (*Server).handleEvents},
+	{pattern: "GET /api/comments", handler: (*Server).handleCommentsList},
+	{pattern: "POST /api/comments", handler: (*Server).handleCommentsCreate},
+	{pattern: "GET /api/comments/{id...}", handler: (*Server).handleCommentGet},
+	{pattern: "PATCH /api/comments/{id...}", handler: (*Server).handleCommentUpdate},
+	{pattern: "DELETE /api/comments/{id...}", handler: (*Server).handleCommentDelete},
+	{pattern: "GET /raw/", handler: (*Server).handleRaw},
+	{pattern: "GET /", handler: (*Server).handleSPA},
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/files", s.handleFiles)
-	mux.HandleFunc("GET /api/file", s.handleFile)
-	mux.HandleFunc("GET /api/comments", s.handleCommentsList)
-	mux.HandleFunc("POST /api/comments", s.handleCommentsCreate)
-	mux.HandleFunc("PATCH /api/comments/{id...}", s.handleCommentUpdate)
-	mux.HandleFunc("DELETE /api/comments/{id...}", s.handleCommentDelete)
-	mux.HandleFunc("GET /raw/", s.handleRaw)
-	mux.HandleFunc("GET /", s.handleSPA)
+	for i := range serverRoutes {
+		route := &serverRoutes[i]
+		mux.HandleFunc(route.pattern, func(w http.ResponseWriter, r *http.Request) {
+			route.handler(s, w, r)
+		})
+	}
 ```
 
 読みどころ。
 
 - `Server` structが `store store.Store` というinterface型でフィールドを持っている。01章で見た `server.NewServer(absDir, web.Dist, fileStore)` の第3引数がここに入る。ServerはFileStoreの存在を知らず、Store interfaceのメソッドだけを呼ぶ
+- `opts ...Option` は可変長引数なので、渡さなければゼロ個として扱われる。設定を1つ増やしても既存の `NewServer(a, b, c)` という呼び出しを書き換えずに済む。GoでこのOptionパターンが好まれる理由がここにある。設定用の構造体を引数に足す方式だと、全呼び出し箇所に `Config{}` を書き足すことになる
+- `Option` が `func(*Server) error` と、単なる `func(*Server)` ではなくerrorを返す形になっているのは、設定値の検証をOption自身に持たせるため。たとえば「ロガーにnilを渡した」を `NewServer` の中ではなくOption側で弾ける。検証ロジックが `NewServer` に溜まらない
+- ルート定義が `serverRoutes` というパッケージ変数に切り出されている。かつては `Handler()` の中に `mux.HandleFunc(...)` が直接並んでいた。テスト側が「実際に登録されているルート」を数えられるようにするための変更で、詳しくは07章で読む
+- `(*Server).handleFiles` はメソッド式 ( method expression ) 。メソッドを「レシーバを第1引数に取る関数」に変換する構文で、特定のインスタンスに束縛されないためパッケージ変数として先に書いておける
 - `fs.Sub(webDist, "dist")` は埋め込みFS ( `web.Dist`、06章で詳しく扱う ) から `dist/` サブディレクトリだけを切り出した `fs.FS` を作る。`go:embed all:dist` で埋め込むとパスに `dist/` プレフィックスが残ったままになるため、`index.html` を素直な相対パスで開けるようにこの一段が要る
 - `mux.HandleFunc("GET /api/files", ...)` のようにメソッド名をパターン文字列の先頭に書けるのは、Go 1.22で `net/http` の `ServeMux` に追加されたルーティング機能。以前は自前でメソッド判定を書くか、外部ルーターライブラリ ( gorilla/mux等 ) を使う必要があったが、これにより標準ライブラリだけでメソッド別ルーティングが書ける ( 依存ゼロ方針を後押しした変更 )
 - `"PATCH /api/comments/{id...}"` の `{id...}` はワイルドカードパターン。`{id}` ( 3点リーダ無し ) だと1セグメントしかマッチしないが、`{id...}` は残り全部 ( スラッシュを含む ) をマッチさせる。idは本来1セグメントの想定だが、あえて `...` にしているのは、`/api/comments/../etc` のようにidの位置に複数セグメントのトラバーサル文字列が来たケースも同じハンドラに到達させ、2節の `hasDotDotSegment` や `isValidCommentID` で一律に弾くため ( 変にマッチせず404になって素通りする方が、挙動として分かりにくい )
@@ -79,19 +115,30 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
-		// CSRF対策: 状態変更メソッド ( POST/PATCH/DELETE ) のみOriginヘッダを検証する。
+		// CSRF対策: Originヘッダが存在するリクエストは、メソッドを問わず全て検証する
+		// ( GET等の読み取り専用リクエストも対象。悪意あるページからのクロスオリジン
+		// fetch/XHRでコメント内容等を読み取られるのを防ぐため )
 		// Originヘッダが無いリクエスト ( curl・同一オリジンナビゲーション ) は許可する。
-		switch r.Method {
-		case http.MethodPost, http.MethodPatch, http.MethodDelete:
-			if origin := r.Header.Get("Origin"); origin != "" && !isAllowedOrigin(origin) {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
+		if origin := r.Header.Get("Origin"); origin != "" && !isAllowedOrigin(origin) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
 		}
 
-		mux.ServeHTTP(w, r)
+		handler.ServeHTTP(w, r)
 	})
 }
+```
+
+最後の `handler` は、ラップ関数を組み立てる前に用意される。認証ミドルウェアが設定されていればmuxを包んだもの、設定されていなければmuxそのものになる。
+
+```go
+	var handler http.Handler = mux
+	if s.authMW != nil {
+		handler = s.authMW(handler)
+		if handler == nil {
+			panic("server: auth middleware returned a nil handler")
+		}
+	}
 ```
 
 ```go
@@ -152,8 +199,9 @@ func isAllowedHost(host string) bool {
 - `Handler()` は `mux` ( ルーティング本体 ) をそのまま返さず、`http.HandlerFunc(func(w, r) {...})` でラップして返している。このラップ関数がリクエストを `mux.ServeHTTP` に渡す前に共通チェックを差し込む、いわゆるミドルウェアの形。Goには専用のミドルウェア構文が無く、「`http.Handler` を受け取って別の `http.Handler` を返す関数」という素朴な合成で表現するのが標準的なやり方
 - `isAllowedHost` によるDNSリバインディング対策は04章のパストラバーサル対策とは狙いが違う多層防御。127.0.0.1バインドはOSレベルで「外部マシンから直接繋がせない」ためのものだが、悪意あるWebサイトを開いたブラウザ自体は `127.0.0.1` 宛にリクエストを送れてしまう ( DNSリバインディング攻撃はこれを悪用し、リクエストのHostヘッダを騙る )。Hostヘッダを検証することで、そうした偽装リクエストも弾く
 - `hasDotDotSegment` のコメントが詳しい。`http.ServeMux` は `..` を含むURLパスを見つけると、ハンドラを呼ぶ前に307/301でクリーンなパスへリダイレクトしてしまう仕様がある。もしこの一手間が無いと、トラバーサル試行がリダイレクト経由で「403にならないまま」別の URLへ流れてしまう恐れがある。ここで先回りして完全一致セグメントの `".."` だけを検出し、リダイレクトが起きる前に403で止めている。実体的な防御は04章の `ResolveSecurePath` に一本化されており、ここはあくまで「リダイレクトに隠れて防御が素通りされない」ための保険
-- CSRF対策は状態変更メソッド ( POST/PATCH/DELETE ) だけを対象にし、Originヘッダが無いリクエストは許可している。curlや同一オリジンからの通常ナビゲーションはOriginを送らないことが多いため、これらを弾かないための設計判断。Originが「送られてきた場合」にだけそれが許可リストと一致するか検証する非対称なチェックになっている
+- CSRF対策はOriginヘッダが送られてきたリクエストを、メソッドを問わず全て検証する。当初は状態変更メソッド ( POST/PATCH/DELETE ) だけを見ていたが、GETも対象に広げてある。悪意あるページからのクロスオリジンfetch/XHRでコメント内容を読み取られる経路を塞ぐため。一方でOriginヘッダが無いリクエストは許可する。curlや同一オリジンからの通常ナビゲーションはOriginを送らないことが多いため、これらを弾かないための設計判断で、Originが「送られてきた場合」にだけ検証する非対称なチェックになっている
 - `isAllowedOrigin` / `isAllowedHost` はどちらも `127.0.0.1` / `localhost` / `::1` のみを許可するホワイトリスト方式。`net.SplitHostPort` でポート部を切り離してからホスト名だけを比較しており、`127.0.0.1:8686` のようにポート付きで来るHostヘッダにも対応する
+- 3つのガードを抜けた先が `mux` ではなく `handler` になっている。認証ミドルウェアが差し込まれるのがこの位置で、ガードより内側かつmuxより外側になる。順序に理由があるので、詳しくは07章で読む。認証を差し込まない場合 ( ローカル利用 ) は `handler` がmuxそのものなので、リクエストの通り道はこれまでと変わらない
 
 ## 3. handleFiles: ファイル一覧のWalkDir
 
