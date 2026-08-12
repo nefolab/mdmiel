@@ -94,8 +94,10 @@ func run(args []string) int {
 	// エディタで開く機能のURLスキーム。フラグではなく環境変数にしてあるのは、
 	// 上の引数振り分けループを触らずに済ませるためと、認証の MDMIEL_AUTH_BASIC /
 	// MDMIEL_PUBLIC_ORIGIN と設定手段を揃えるため。未設定ならサーバー既定 ( vscode )。
+	// LookupEnv で「未設定」と「空文字を明示設定」を区別する。空文字は不正値として
+	// WithEditorScheme に弾かせ、設定したつもりが既定値で動く取り違えを防ぐ。
 	var opts []server.Option
-	if scheme := os.Getenv("MDMIEL_EDITOR_SCHEME"); scheme != "" {
+	if scheme, ok := os.LookupEnv("MDMIEL_EDITOR_SCHEME"); ok {
 		opts = append(opts, server.WithEditorScheme(scheme))
 	}
 

@@ -108,12 +108,13 @@ describe('Sidebar の「開く」ボタン', () => {
     });
 
     const link = editorLinks()[0];
-    // jsdomはカスタムスキームへの遷移を実装していないため、既定動作は抑止して伝播だけ見る
-    link.addEventListener('click', (e) => e.preventDefault());
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
     await act(async () => {
-      link.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      link.dispatchEvent(event);
     });
 
     expect(onSelectFile).not.toHaveBeenCalled();
+    // 既定動作を止めるとエディタが起動しなくなるため、preventDefault されていないことも固定する
+    expect(event.defaultPrevented).toBe(false);
   });
 });

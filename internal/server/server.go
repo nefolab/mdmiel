@@ -37,9 +37,29 @@ type Server struct {
 // defaultEditorScheme は「エディタで開く」に使うURLスキームの既定値。
 const defaultEditorScheme = "vscode"
 
-// editorSchemePattern はURLスキームとして受け付ける文字種。英数字とハイフンだけに
-// 絞ってあるため、"://" を含む値やスラッシュ入りの値はここで弾かれる。
-var editorSchemePattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
+// editorSchemePattern はURLスキームとして受け付ける文字種。RFC 3986 のスキーム文法に
+// 合わせて先頭を英字に限り、以降は英数字とハイフンだけを許す。"://" やスラッシュ入りの
+// 値はここで弾かれる。RFC が許す "+" と "." は意図的に落としてある ( vscode /
+// vscode-insiders / cursor はこの範囲に収まるため、実用上の不足は今のところ無い )。
+var editorSchemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
+
+// deniedEditorSchemes はブラウザが自前で解釈するスキーム。生成したURLはフロントの
+// アンカーの href に入るため、javascript: のようにページ内でコードが動くものや、
+// 意図せぬネットワーク送信を招くものは文字種の検査とは別に名指しで拒否する。
+// 設定するのは利用者自身だが、誤設定が「ファイル名にJavaScriptを仕込める」状態に
+// 直結するため、fail-closedにしておく。
+var deniedEditorSchemes = map[string]bool{
+	"javascript": true,
+	"vbscript":   true,
+	"data":       true,
+	"blob":       true,
+	"file":       true,
+	"http":       true,
+	"https":      true,
+	"about":      true,
+	"ws":         true,
+	"wss":        true,
+}
 
 // Option は NewServer の任意設定。検証が必要な設定 ( 将来の認証・公開Origin等 ) を
 // 追加できるよう error を返す形にしてある。
@@ -69,11 +89,15 @@ func WithAuth(mw auth.Middleware) Option {
 }
 
 // WithEditorScheme は「エディタで開く」のURLスキームを差し替える ( 既定は "vscode" )。
-// 英数字とハイフン以外を含む値・空文字は error で弾く。
+// 空文字・英数字とハイフン以外を含む値・先頭が英字でない値・ブラウザが自前で解釈する
+// スキームは error で弾く。
 func WithEditorScheme(scheme string) Option {
 	return func(s *Server) error {
 		if !editorSchemePattern.MatchString(scheme) {
-			return fmt.Errorf("WithEditorScheme: invalid scheme %q (allowed: letters, digits, hyphen)", scheme)
+			return fmt.Errorf("WithEditorScheme: invalid scheme %q (must start with a letter; allowed: letters, digits, hyphen)", scheme)
+		}
+		if deniedEditorSchemes[strings.ToLower(scheme)] {
+			return fmt.Errorf("WithEditorScheme: scheme %q is handled by the browser and must not be used", scheme)
 		}
 		s.editorScheme = scheme
 		return nil
@@ -129,7 +153,11 @@ type FileEntry struct {
 	Type string `json:"type"`
 }
 
-// FilesResponse の Root は「エディタで開く」用のrootDir絶対パス ( OSネイティブ表記 )。
+// FilesResponse の Root は「エディタで開く」用のrootDir絶対パスを、URLに載せられるよう
+// 区切りをスラッシュへ揃えたもの ( filepath.ToSlash )。変換をサーバー側で行うのは実行OSを
+// 知っているのがサーバーだけだからで、フロントで一律に "\" を "/" へ潰すとPOSIXの正当な
+// ファイル名 ( ディレクトリ名に "\" を含むもの ) を壊す。WindowsのUNC ( \\server\share )
+// は先頭の "//" として残るため、フロント側で先頭スラッシュを削ってはならない。
 // OSユーザー名を含みうるためローカル起動時にしか返してはならず、公開構成では空にする。
 // 判定をサーバー側に置くのは、フロントで出し分けてもサーバーが絶対パスを返した時点で
 // すでに漏れているため。Rootが空のときフロントは「開く」ボタンを描画しない。
@@ -393,7 +421,7 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(FilesResponse{
 		Files:        files,
-		Root:         s.rootDir,
+		Root:         filepath.ToSlash(s.rootDir),
 		EditorScheme: s.editorScheme,
 	})
 }
