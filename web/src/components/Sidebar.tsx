@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { buildEditorUrl } from '../lib/editorLink';
 
 interface FileItem {
   path: string;
@@ -50,6 +51,9 @@ function buildTree(files: FileItem[]): TreeNode {
 
 export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: SidebarProps) {
   const [files, setFiles] = useState<FileItem[]>([]);
+  // root はローカル起動時だけサーバーが返す ( 公開構成では空 )。空なら「開く」を出さない
+  const [root, setRoot] = useState('');
+  const [editorScheme, setEditorScheme] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<{ [path: string]: boolean }>({});
@@ -64,6 +68,8 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
       .then((data) => {
         if (!cancelled) {
           setFiles(data.files || []);
+          setRoot(data.root || '');
+          setEditorScheme(data.editorScheme || '');
           setError(null);
           setLoading(false);
         }
@@ -110,6 +116,8 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
       onSelectFile(node.path, 'right');
     };
 
+    const editorUrl = node.isDir ? null : buildEditorUrl(editorScheme, root, node.path);
+
     return (
       <div key={node.path} style={{ paddingLeft: `${depth > 0 ? 8 : 0}px` }}>
         <div
@@ -133,6 +141,16 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
               >
                 右で開く
               </button>
+              {editorUrl && (
+                <a
+                  className="btn-open-editor"
+                  href={editorUrl}
+                  onClick={(e) => e.stopPropagation()}
+                  title="エディタで開く"
+                >
+                  開く
+                </a>
+              )}
             </div>
           )}
         </div>

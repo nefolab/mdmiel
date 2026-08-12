@@ -90,7 +90,16 @@ func run(args []string) int {
 
 	// サーバーインスタンス生成 ( コメントはrootDir配下の.mdmiel/comments/にFileStoreで永続化 )
 	fileStore := store.NewFileStore(absDir)
-	srv, err := server.NewServer(absDir, web.Dist, fileStore)
+
+	// エディタで開く機能のURLスキーム。フラグではなく環境変数にしてあるのは、
+	// 上の引数振り分けループを触らずに済ませるためと、認証の MDMIEL_AUTH_BASIC /
+	// MDMIEL_PUBLIC_ORIGIN と設定手段を揃えるため。未設定ならサーバー既定 ( vscode )。
+	var opts []server.Option
+	if scheme := os.Getenv("MDMIEL_EDITOR_SCHEME"); scheme != "" {
+		opts = append(opts, server.WithEditorScheme(scheme))
+	}
+
+	srv, err := server.NewServer(absDir, web.Dist, fileStore, opts...)
 	if err != nil {
 		logger.Error("failed to create server", "root", absDir, "err", err)
 		return 1

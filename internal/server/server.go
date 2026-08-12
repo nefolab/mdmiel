@@ -31,7 +31,15 @@ type Server struct {
 	startLiveReloadOnce sync.Once
 	logger              *slog.Logger // NewServerで必ず設定される ( 既定は slog.Default() )
 	authMW              auth.Middleware
+	editorScheme        string // NewServerで必ず設定される ( 既定は defaultEditorScheme )
 }
+
+// defaultEditorScheme は「エディタで開く」に使うURLスキームの既定値。
+const defaultEditorScheme = "vscode"
+
+// editorSchemePattern はURLスキームとして受け付ける文字種。英数字とハイフンだけに
+// 絞ってあるため、"://" を含む値やスラッシュ入りの値はここで弾かれる。
+var editorSchemePattern = regexp.MustCompile(`^[A-Za-z0-9-]+$`)
 
 // Option は NewServer の任意設定。検証が必要な設定 ( 将来の認証・公開Origin等 ) を
 // 追加できるよう error を返す形にしてある。
@@ -60,6 +68,18 @@ func WithAuth(mw auth.Middleware) Option {
 	}
 }
 
+// WithEditorScheme は「エディタで開く」のURLスキームを差し替える ( 既定は "vscode" )。
+// 英数字とハイフン以外を含む値・空文字は error で弾く。
+func WithEditorScheme(scheme string) Option {
+	return func(s *Server) error {
+		if !editorSchemePattern.MatchString(scheme) {
+			return fmt.Errorf("WithEditorScheme: invalid scheme %q (allowed: letters, digits, hyphen)", scheme)
+		}
+		s.editorScheme = scheme
+		return nil
+	}
+}
+
 // NewServer はrootDir配下を配信するmdmielサーバーを作る。
 // stは行コメントの永続化先 ( 通常はstore.NewFileStore(rootDir) ) を注入する。
 func NewServer(rootDir string, webDist embed.FS, st store.Store, opts ...Option) (*Server, error) {
@@ -74,6 +94,8 @@ func NewServer(rootDir string, webDist embed.FS, st store.Store, opts ...Option)
 		store:   st,
 		hub:     newEventHub(),
 		logger:  slog.Default(),
+
+		editorScheme: defaultEditorScheme,
 	}
 	for _, opt := range opts {
 		if opt == nil {
@@ -107,8 +129,14 @@ type FileEntry struct {
 	Type string `json:"type"`
 }
 
+// FilesResponse の Root は「エディタで開く」用のrootDir絶対パス ( OSネイティブ表記 )。
+// OSユーザー名を含みうるためローカル起動時にしか返してはならず、公開構成では空にする。
+// 判定をサーバー側に置くのは、フロントで出し分けてもサーバーが絶対パスを返した時点で
+// すでに漏れているため。Rootが空のときフロントは「開く」ボタンを描画しない。
 type FilesResponse struct {
-	Files []FileEntry `json:"files"`
+	Files        []FileEntry `json:"files"`
+	Root         string      `json:"root"`
+	EditorScheme string      `json:"editorScheme"`
 }
 
 type FileResponse struct {
@@ -360,8 +388,14 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// TODO(PR-C): publicOrigin が非nilなら Root を空にする。現時点では main.go に
+	// --listen も認証も無く公開経路自体が存在しないため、常に絶対パスを返している。
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(FilesResponse{Files: files})
+	json.NewEncoder(w).Encode(FilesResponse{
+		Files:        files,
+		Root:         s.rootDir,
+		EditorScheme: s.editorScheme,
+	})
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
