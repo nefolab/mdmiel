@@ -56,6 +56,18 @@ describe('Sidebar の「開く」ボタン', () => {
     ]);
   });
 
+  it('アイコン表示でも用途が読み取れる名前を持つ', async () => {
+    await renderSidebar({
+      files: [{ path: 'doc.md', type: 'markdown' }],
+      root: '/Users/me/work',
+      editorScheme: 'vscode',
+    });
+
+    const link = editorLinks()[0];
+    expect(link.getAttribute('aria-label')).toBe('エディタで開く');
+    expect(link.getAttribute('title')).toBe('エディタで開く');
+  });
+
   it('editorSchemeを差し替えるとURLのスキームが変わる', async () => {
     await renderSidebar({
       files: [{ path: 'doc.md', type: 'markdown' }],

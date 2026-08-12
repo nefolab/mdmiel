@@ -147,8 +147,11 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
                   href={editorUrl}
                   onClick={(e) => e.stopPropagation()}
                   title="エディタで開く"
+                  aria-label="エディタで開く"
                 >
-                  開く
+                  {/* ラベルを文字にするとファイル名の表示幅を削るためアイコンにする。
+                      意味はtitle ( ホバー ) と aria-label で補う */}
+                  <span aria-hidden="true">✏️</span>
                 </a>
               )}
             </div>

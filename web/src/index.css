@@ -291,13 +291,6 @@ body {
   opacity: 1;
 }
 
-.btn-open-editor {
-  display: inline-block;
-  text-decoration: none;
-  line-height: 1.4;
-  margin-left: 4px;
-}
-
 .btn-open-right,
 .btn-open-editor {
   background: transparent;
@@ -308,6 +301,16 @@ body {
   font-size: 11px;
   cursor: pointer;
   transition: all 0.2s;
+}
+
+/* 共通ルールの後に置いてpaddingを上書きする ( 順序を入れ替えないこと ) */
+.btn-open-editor {
+  display: inline-block;
+  text-decoration: none;
+  line-height: 1.4;
+  margin-left: 4px;
+  /* アイコン1文字なので左右のpaddingを詰めて、ファイル名の表示幅を残す */
+  padding: 2px 5px;
 }
 
 .btn-open-right:hover,
