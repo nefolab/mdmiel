@@ -39,6 +39,9 @@ function title(): HTMLElement {
 
 const files = [{ path: 'doc.md', type: 'markdown' }];
 
+// 見出しを大文字化しない ( .sidebar-title から text-transform: uppercase を外した ) ことは
+// ここでは検査できない。jsdomは外部CSSを適用せず、text-transform は textContent を変えない
+// ため。表示上の確認は実機で行う。
 describe('サイドバーの見出し', () => {
   it('配信中のディレクトリ名を出す', async () => {
     await renderSidebar({ files, rootName: 'Workspace' });
@@ -46,10 +49,11 @@ describe('サイドバーの見出し', () => {
     expect(title().textContent?.trim()).toBe('Workspace');
   });
 
-  it('ディレクトリ名をそのまま出す ( 大文字化しない )', async () => {
-    await renderSidebar({ files, rootName: 'my-docs' });
+  it('ファイルが1件も無くても見出しは出す', async () => {
+    await renderSidebar({ files: [], rootName: 'Workspace' });
 
-    expect(title().textContent?.trim()).toBe('my-docs');
+    expect(title().textContent?.trim()).toBe('Workspace');
+    expect(mount.textContent).toContain('ファイルがありません');
   });
 
   it('rootNameが空なら既定文言にフォールバックする', async () => {

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"mdmiel/internal/store"
@@ -43,8 +44,11 @@ func getFilesResponse(t *testing.T, srv *Server) filesWire {
 // 配信中のディレクトリに追随することを固定する。固定値やrootDir全体を返す実装では
 // 落ちるよう、名前を指定した一時ディレクトリで検証する。
 func TestFilesResponseCarriesRootName(t *testing.T) {
+	// 期待値をリテラルで書くと、handleFiles が同じ固定値を返す変異を素通しする。
+	// テスト名から一意な名前を作り、期待値もそこから算出する
+	dirName := "root-" + strings.ReplaceAll(t.Name(), "/", "-")
 	parent := t.TempDir()
-	root := filepath.Join(parent, "Workspace")
+	root := filepath.Join(parent, dirName)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatalf("mkdir fixture: %v", err)
 	}
@@ -58,8 +62,8 @@ func TestFilesResponseCarriesRootName(t *testing.T) {
 
 	got := getFilesResponse(t, srv)
 
-	if got.RootName != "Workspace" {
-		t.Errorf("rootName = %q, want %q", got.RootName, "Workspace")
+	if got.RootName != dirName {
+		t.Errorf("rootName = %q, want %q", got.RootName, dirName)
 	}
 	// 絶対パスを見出しに使っていないこと ( 親ディレクトリ名が混ざらない )
 	if got.RootName == root {
@@ -84,6 +88,9 @@ func TestRootDisplayName(t *testing.T) {
 		{"posix root", "/", ""},
 		{"dot", ".", ""},
 		{"empty", "", ""},
+		// rootDir は絶対パスに正規化済みが前提なので ".." は本来到達しない。
+		// 前提が崩れたときに気づけるよう、現在の挙動を明示しておく
+		{"parent (contract violation)", "..", ".."},
 		{"dotted directory", filepath.Join("home", ".mdmiel"), ".mdmiel"},
 		{"name with spaces", filepath.Join("home", "my docs"), "my docs"},
 	}
@@ -93,5 +100,26 @@ func TestRootDisplayName(t *testing.T) {
 				t.Errorf("rootDisplayName(%q) = %q, want %q", tc.rootDir, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestFilesResponseRootNameFollowsTheServedDirectory は、サーバーごとに rootName が
+// 変わることを固定する。1つのディレクトリしか見ないテストでは、固定値を返す実装を
+// 検出できない。
+func TestFilesResponseRootNameFollowsTheServedDirectory(t *testing.T) {
+	parent := t.TempDir()
+
+	for _, name := range []string{"alpha", "beta-docs"} {
+		root := filepath.Join(parent, name)
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatalf("mkdir fixture: %v", err)
+		}
+		srv, err := NewServer(root, web.Dist, store.NewFileStore(root))
+		if err != nil {
+			t.Fatalf("NewServer: %v", err)
+		}
+		if got := getFilesResponse(t, srv).RootName; got != name {
+			t.Errorf("rootName = %q, want %q", got, name)
+		}
 	}
 }
