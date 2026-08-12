@@ -69,15 +69,28 @@ function editorLinks(): HTMLAnchorElement[] {
   return Array.from(mount.querySelectorAll('.pane-title a.pane-open-editor-btn'));
 }
 
+/** ペインごとに ( 表示パス, リンクのhref一覧 ) を取り出す。左右の取り違えを検出するため */
+function panes(): { path: string; hrefs: (string | null)[] }[] {
+  return Array.from(mount.querySelectorAll('.pane')).map((pane) => {
+    const title = pane.querySelector('.pane-title')!;
+    return {
+      path: title.querySelector('.pane-title-path')!.textContent ?? '',
+      hrefs: Array.from(title.querySelectorAll('a.pane-open-editor-btn')).map((a) =>
+        a.getAttribute('href')
+      ),
+    };
+  });
+}
+
 describe('ペインヘッダーの鉛筆ボタン', () => {
-  it('absPathが返ればファイルパスの隣にエディタURLのリンクを描画する', async () => {
+  it('各ペインが自分のファイルのリンクを1本ずつ持つ', async () => {
     await renderPanes('/Users/me/work', 'vscode');
 
-    const links = editorLinks();
-    expect(links).toHaveLength(2);
-    expect(links.map((a) => a.getAttribute('href'))).toEqual([
-      'vscode://file/Users/me/work/docs/left.md',
-      'vscode://file/Users/me/work/docs/right.md',
+    // ペイン単位で照合する。DOM順に並べるだけの検査だと、片方のヘッダーに2本
+    // 入って他方が0本という壊れ方を見逃す
+    expect(panes()).toEqual([
+      { path: 'docs/left.md', hrefs: ['vscode://file/Users/me/work/docs/left.md'] },
+      { path: 'docs/right.md', hrefs: ['vscode://file/Users/me/work/docs/right.md'] },
     ]);
   });
 
@@ -87,6 +100,29 @@ describe('ペインヘッダーの鉛筆ボタン', () => {
     const title = mount.querySelector('.pane-title')!;
     expect(title.textContent).toContain('docs/left.md');
     expect(title.querySelector('a.pane-open-editor-btn')).not.toBeNull();
+  });
+
+  it('ファイル切替の途中で前のファイルのリンクを残さない', async () => {
+    await renderPanes('/Users/me/work', 'vscode');
+    expect(panes()[0].hrefs).toEqual(['vscode://file/Users/me/work/docs/left.md']);
+
+    // 新しいパスの取得を未解決のままにして、切替途中の状態で止める
+    vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>(() => {})));
+    await act(async () => {
+      root.render(
+        <SplitView
+          revision={1}
+          viewState={{ left: 'docs/next.md', right: 'docs/right.md' }}
+          onClosePane={() => {}}
+        />
+      );
+      await Promise.resolve();
+    });
+
+    const left = panes()[0];
+    expect(left.path).toBe('docs/next.md');
+    // 表示は next.md なのに left.md が開くリンクが残っていてはいけない
+    expect(left.hrefs).toEqual([]);
   });
 
   it('editorSchemeを差し替えるとURLのスキームが変わる', async () => {

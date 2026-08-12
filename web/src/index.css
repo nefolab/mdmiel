@@ -347,6 +347,17 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
+  /* 長いパスで操作部を押し出さないよう、縮む側をタイトルに寄せる */
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* パス本体だけを省略表示にする ( アイコンと鉛筆は縮ませない ) */
+.pane-title-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ファイルパスの右隣に置く鉛筆ボタン。パスが長い行でも折り返さないよう縮ませない */
@@ -367,6 +378,7 @@ body {
 }
 
 .pane-actions {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;

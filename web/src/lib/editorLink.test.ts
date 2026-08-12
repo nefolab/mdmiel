@@ -79,7 +79,21 @@ describe('buildEditorUrl', () => {
   });
 
   it('ブラウザが解釈するスキームを拒否する', () => {
-    for (const scheme of ['javascript', 'JavaScript', 'data', 'http', 'https', 'file', 'vbscript']) {
+    // 実装の拒否リスト全11種を明示する ( 1つ削る変異を検出するため )
+    const denied = [
+      'javascript',
+      'vbscript',
+      'data',
+      'blob',
+      'file',
+      'http',
+      'https',
+      'about',
+      'ws',
+      'wss',
+      'JavaScript',
+    ];
+    for (const scheme of denied) {
       expect(buildEditorUrl(scheme, '/root/a.md')).toBeNull();
     }
   });

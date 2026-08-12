@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -20,6 +21,12 @@ func newEditorTestServer(t *testing.T, opts ...Option) (*Server, string) {
 	t.Helper()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "doc.md"), []byte("# doc\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatalf("mkdir fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "sub", "page.md"), []byte("# page\n"), 0o644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 	srv, err := NewServer(root, web.Dist, store.NewFileStore(root), opts...)
@@ -104,10 +111,10 @@ func TestFilesResponseHasNoEditorFields(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
 		t.Fatalf("decode body as object: %v", err)
 	}
-	for _, key := range []string{"root", "absPath", "editorScheme"} {
-		if _, ok := keys[key]; ok {
-			t.Errorf("/api/files must not expose %q (got keys %v)", key, keysOf(keys))
-		}
+	// ブラックリストだと別名 ( workspaceRoot 等 ) で絶対パスを足す変異を通すため、
+	// トップレベルキーが files だけであることを厳密に固定する
+	if got := keysOf(keys); len(got) != 1 || got[0] != "files" {
+		t.Errorf("/api/files top-level keys = %v, want [files] only", got)
 	}
 }
 
@@ -210,5 +217,102 @@ func TestWithEditorSchemeAcceptsHyphenAndDigits(t *testing.T) {
 	root := t.TempDir()
 	if _, err := NewServer(root, web.Dist, store.NewFileStore(root), WithEditorScheme("vscode-insiders2")); err != nil {
 		t.Fatalf("NewServer with valid scheme returned error: %v", err)
+	}
+}
+
+// TestFileResponseAbsPathTracksRequestedFile は、要求したファイルと absPath が
+// 対応することを固定する。doc.md だけを見るテストでは、パスを固定値で組み立てる
+// 誤実装 ( 常に <dir>/doc.md を返す等 ) を検出できない。
+func TestFileResponseAbsPathTracksRequestedFile(t *testing.T) {
+	srv, root := newEditorTestServer(t)
+	realRoot := evalSymlinks(t, root)
+
+	cases := []struct {
+		relPath string
+		want    string
+	}{
+		{"doc.md", filepath.ToSlash(filepath.Join(realRoot, "doc.md"))},
+		{"sub/page.md", filepath.ToSlash(filepath.Join(realRoot, "sub", "page.md"))},
+	}
+	for _, tc := range cases {
+		t.Run(tc.relPath, func(t *testing.T) {
+			got, _ := getFileResponse(t, srv, tc.relPath)
+			if got.AbsPath != tc.want {
+				t.Errorf("absPath = %q, want %q", got.AbsPath, tc.want)
+			}
+			if got.Path != tc.relPath {
+				t.Errorf("path = %q, want %q", got.Path, tc.relPath)
+			}
+		})
+	}
+}
+
+// TestFileResponseAbsPathResolvesSymlinks は、シンボリックリンク経由で開いたときに
+// リンク名ではなく実体パスが返る契約を固定する。エディタには実体を開かせたいため
+// この挙動を採っている ( そのぶんリンク先の構成が露出することは受け入れる )。
+func TestFileResponseAbsPathResolvesSymlinks(t *testing.T) {
+	srv, root := newEditorTestServer(t)
+	realRoot := evalSymlinks(t, root)
+
+	if err := os.Symlink(filepath.Join(root, "sub", "page.md"), filepath.Join(root, "alias.md")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	got, _ := getFileResponse(t, srv, "alias.md")
+
+	want := filepath.ToSlash(filepath.Join(realRoot, "sub", "page.md"))
+	if got.AbsPath != want {
+		t.Errorf("absPath = %q, want resolved target %q", got.AbsPath, want)
+	}
+}
+
+// TestFileOutsideRootLeaksNoAbsPath は、境界外を指すリンクが403で落ち、絶対パスを
+// 含むJSONを返さないことを固定する ( 拒否そのものは path_test.go が検査している )。
+func TestFileOutsideRootLeaksNoAbsPath(t *testing.T) {
+	srv, root := newEditorTestServer(t)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("# secret\n"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.md"), filepath.Join(root, "escape.md")); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/file?path="+url.QueryEscape("escape.md"), nil)
+	req.Host = "127.0.0.1:8686"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), outside) {
+		t.Errorf("body leaks the outside path: %q", rec.Body.String())
+	}
+}
+
+// TestFileWithBackslashIsRejected は、"\" を含む相対パスが ResolveSecurePath に
+// 一律で拒否される既存仕様を、エディタ機能の側からも固定する。POSIXでは "\" は
+// 正当なファイル名文字だが、Windowsの区切りとして悪用されうるため安全側に倒している。
+// つまりこのAPI経由では "\" 入りの相対パスに到達できず、absPath にも現れない。
+// ( ただしrootDir自身のディレクトリ名に "\" が含まれる場合は absPath に現れるため、
+//
+//	フロントの buildEditorUrl は "\" を区切りとして潰してはならない )
+func TestFileWithBackslashIsRejected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("backslash is a separator on Windows")
+	}
+	srv, _ := newEditorTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/file?path="+url.QueryEscape(`a\b/doc.md`), nil)
+	req.Host = "127.0.0.1:8686"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "absPath") {
+		t.Errorf("rejected request must not return absPath: %q", rec.Body.String())
 	}
 }
