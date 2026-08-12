@@ -24,5 +24,15 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'jsdom',
+    css: true,
+    onConsoleLog(log, type) {
+      if (
+        type === 'stderr'
+        && log.includes('Could not parse CSS stylesheet')
+        && log.includes('@layer hljs-theme')
+      ) {
+        return false;
+      }
+    },
   },
 });

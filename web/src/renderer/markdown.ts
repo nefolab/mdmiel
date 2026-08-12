@@ -1,4 +1,5 @@
 import MarkdownIt from 'markdown-it';
+import { highlightCode } from './highlight';
 
 /**
  * A markdown-it plugin that injects `data-source-line` attributes
@@ -21,6 +22,8 @@ export function sourceLinePlugin(md: MarkdownIt) {
 const md = new MarkdownIt({
   html: false, // Ensure raw HTML is escaped for security as per specs
   linkify: true,
+  langPrefix: 'hljs language-',
+  highlight: (code, lang) => highlightCode(code, lang) ?? '',
 });
 
 md.use(sourceLinePlugin);

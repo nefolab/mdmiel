@@ -29,4 +29,48 @@ This is a paragraph.
     expect(html).not.toContain('<div>Hello</div>');
     expect(html).toContain('&lt;div&gt;Hello&lt;/div&gt;');
   });
+
+  it.each([
+    ['registered language', '```go\npackage main\n```'],
+    ['unregistered language', '```brainfuck\n+++\n```'],
+    ['no language', '```\nplain text\n```'],
+  ])('preserves the source line on a code block with %s', (_case, markdown) => {
+    const container = document.createElement('div');
+    container.innerHTML = renderMarkdown(markdown);
+
+    const codeBlocks = container.querySelectorAll('pre > code[data-source-line="1"]');
+    expect(codeBlocks).toHaveLength(1);
+    expect(codeBlocks[0].querySelector('pre')).toBeNull();
+  });
+
+  it('adds highlight.js and language classes to registered code blocks', () => {
+    const container = document.createElement('div');
+    container.innerHTML = renderMarkdown('```go\npackage main\n```');
+
+    const code = container.querySelector('pre > code[data-source-line="1"]');
+    expect(code?.classList.contains('hljs')).toBe(true);
+    expect(code?.classList.contains('language-go')).toBe(true);
+  });
+
+  it('renders highlighted spans only for registered languages', () => {
+    const highlightedContainer = document.createElement('div');
+    highlightedContainer.innerHTML = renderMarkdown('```go\npackage main\nfunc main() {}\n```');
+
+    const fallbackContainer = document.createElement('div');
+    fallbackContainer.innerHTML = renderMarkdown('```brainfuck\n+++\n```');
+
+    expect(highlightedContainer.querySelectorAll('code [class^="hljs-"]').length)
+      .toBeGreaterThan(0);
+    expect(fallbackContainer.querySelectorAll('code [class^="hljs-"]')).toHaveLength(0);
+  });
+
+  it.each(['xml', 'brainfuck'])('escapes code content for language %s', (lang) => {
+    const source = '<script>alert(1)</script>';
+    const container = document.createElement('div');
+    container.innerHTML = renderMarkdown(`\`\`\`${lang}\n${source}\n\`\`\``);
+
+    const code = container.querySelector('pre > code');
+    expect(container.querySelector('script')).toBeNull();
+    expect(code?.textContent).toBe(`${source}\n`);
+  });
 });
