@@ -61,9 +61,11 @@ mdmiel/
 │   ├── store/
 │   │   ├── store.go        コメントの型とStore interface ( 02章 )
 │   │   └── filestore.go    サイドカーJSON実装 ( 03章 )
+│   ├── auth/
+│   │   └── auth.go         認証の差し込み口 ( 07章 )
 │   └── server/
 │       ├── path.go         パストラバーサル対策 ( 04章 )
-│       └── server.go       HTTPルーティングとAPI ( 05章 )
+│       └── server.go       HTTPルーティングとAPI ( 05章・認証部分は07章 )
 ├── web/
 │   ├── embed.go            distをバイナリに埋め込む3行 ( 05章 )
 │   └── src/                React SPA ( 06章で概観 )
@@ -86,10 +88,15 @@ Goの慣習として押さえること。
 module mdmiel
 
 go 1.26.4
+
+require (
+	github.com/fsnotify/fsnotify v1.7.0
+	golang.org/x/sys v0.34.0 // indirect
+)
 ```
 
 - module行がimportパスの起点。`import "mdmiel/internal/store"` のように使う
-- 依存が1行も無い点に注目。バックエンドはGo標準ライブラリのみで書かれている ( UUIDも自作、ルーティングもnet/http )。依存を増やさない判断は03章・05章で効いてくる
+- 直接依存が1つしか無い点に注目。ファイル変更を検知するライブリロードのためにfsnotifyを入れているだけで ( `golang.org/x/sys` はそのfsnotifyが使う間接依存 ) 、それ以外はGo標準ライブラリのみで書かれている。UUIDも自作、ルーティングもnet/http、認証の差し込み口も標準の `http.Handler` だけで表現している。依存を増やさない判断は03章・05章・07章で効いてくる
 
 ## 章立てと読み順
 
@@ -102,6 +109,9 @@ go 1.26.4
 | 04 | internal/server/path.go | パストラバーサル対策 |
 | 05 | internal/server/server.go | ルーティング・ミドルウェア・embed |
 | 06 | web/src/ | フロントエンド概観 ( 薄め ) |
+| 07 | internal/auth/auth.go + server.go の認証部分 | 拡張点の設計・context・テストの有効性 |
+
+07章は00〜06と性質が違う。他の章が「動いているコードを読む」のに対し、07章は「これから認証を差し込めるようにするための土台」を読む。まだ `main.go` から呼ばれていないコードなので、レビュー目的で読む場合は07章の9節から先に見ると現在地が掴みやすい。
 
 ## 動かしてから読む
 

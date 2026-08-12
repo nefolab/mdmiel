@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"math"
+	"mdmiel/internal/auth"
 	"mdmiel/internal/fsutil"
 	"mdmiel/internal/store"
 	"net"
@@ -29,6 +30,7 @@ type Server struct {
 	hub                 *eventHub
 	startLiveReloadOnce sync.Once
 	logger              *slog.Logger // NewServerで必ず設定される ( 既定は slog.Default() )
+	authMW              auth.Middleware
 }
 
 // Option は NewServer の任意設定。検証が必要な設定 ( 将来の認証・公開Origin等 ) を
@@ -42,6 +44,18 @@ func WithLogger(l *slog.Logger) Option {
 			return errors.New("WithLogger: logger must not be nil")
 		}
 		s.logger = l
+		return nil
+	}
+}
+
+// WithAuth は認証ミドルウェアを mux の手前に差し込む。
+// ミドルウェアは非nilのhttp.Handlerを返さなければならない。
+func WithAuth(mw auth.Middleware) Option {
+	return func(s *Server) error {
+		if mw == nil {
+			return errors.New("WithAuth: middleware must not be nil")
+		}
+		s.authMW = mw
 		return nil
 	}
 }
@@ -172,18 +186,42 @@ func isValidCommentID(id string) bool {
 	return commentIDPattern.MatchString(id)
 }
 
+type serverRoute struct {
+	pattern string
+	handler func(*Server, http.ResponseWriter, *http.Request)
+}
+
+// serverRoutes は Handler が mux に登録する全ルートの定義元。
+var serverRoutes = []serverRoute{
+	{pattern: "GET /api/files", handler: (*Server).handleFiles},
+	{pattern: "GET /api/file", handler: (*Server).handleFile},
+	{pattern: "GET /api/events", handler: (*Server).handleEvents},
+	{pattern: "GET /api/comments", handler: (*Server).handleCommentsList},
+	{pattern: "POST /api/comments", handler: (*Server).handleCommentsCreate},
+	{pattern: "GET /api/comments/{id...}", handler: (*Server).handleCommentGet},
+	{pattern: "PATCH /api/comments/{id...}", handler: (*Server).handleCommentUpdate},
+	{pattern: "DELETE /api/comments/{id...}", handler: (*Server).handleCommentDelete},
+	{pattern: "GET /raw/", handler: (*Server).handleRaw},
+	{pattern: "GET /", handler: (*Server).handleSPA},
+}
+
+// Handler はHTTPハンドラを返す。呼び出しごとにmuxと認証ミドルウェアを構築する。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/files", s.handleFiles)
-	mux.HandleFunc("GET /api/file", s.handleFile)
-	mux.HandleFunc("GET /api/events", s.handleEvents)
-	mux.HandleFunc("GET /api/comments", s.handleCommentsList)
-	mux.HandleFunc("POST /api/comments", s.handleCommentsCreate)
-	mux.HandleFunc("GET /api/comments/{id...}", s.handleCommentGet)
-	mux.HandleFunc("PATCH /api/comments/{id...}", s.handleCommentUpdate)
-	mux.HandleFunc("DELETE /api/comments/{id...}", s.handleCommentDelete)
-	mux.HandleFunc("GET /raw/", s.handleRaw)
-	mux.HandleFunc("GET /", s.handleSPA)
+	for i := range serverRoutes {
+		route := &serverRoutes[i]
+		mux.HandleFunc(route.pattern, func(w http.ResponseWriter, r *http.Request) {
+			route.handler(s, w, r)
+		})
+	}
+
+	var handler http.Handler = mux
+	if s.authMW != nil {
+		handler = s.authMW(handler)
+		if handler == nil {
+			panic("server: auth middleware returned a nil handler")
+		}
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// DNS rebinding対策: Hostヘッダのホスト部が127.0.0.1/localhost/[::1]以外なら403を返す
@@ -216,7 +254,7 @@ func (s *Server) Handler() http.Handler {
 			return
 		}
 
-		mux.ServeHTTP(w, r)
+		handler.ServeHTTP(w, r)
 	})
 }
 
@@ -510,6 +548,14 @@ func (s *Server) handleCommentsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var author string
+	if u, ok := auth.UserFrom(r.Context()); ok {
+		author = u.DisplayName()
+	} else if s.authMW != nil {
+		s.internalError(w, r, errors.New("authenticated request has no user"))
+		return
+	}
+
 	if req.Path == "" {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
@@ -536,6 +582,7 @@ func (s *Server) handleCommentsCreate(w http.ResponseWriter, r *http.Request) {
 		Path:   filepath.ToSlash(req.Path),
 		Anchor: req.Anchor,
 		Body:   req.Body,
+		Author: author,
 		Links:  req.Links,
 	})
 	if err != nil {
