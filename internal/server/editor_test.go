@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -28,28 +29,27 @@ func newEditorTestServer(t *testing.T, opts ...Option) (*Server, string) {
 	return srv, root
 }
 
-// filesWire は /api/files のJSONを、実装の構造体を経由せずキー名ごと検証するための型。
-// FilesResponse をそのままデコードに使うと、jsonタグを改名する変異 ( フロントからは
+// fileWire は /api/file のJSONを、実装の構造体を経由せずキー名ごと検証するための型。
+// FileResponse をそのままデコードに使うと、jsonタグを改名する変異 ( フロントからは
 // 値が読めなくなる ) をテストが素通ししてしまうため、wire側の契約を別に持つ。
-type filesWire struct {
-	Files []struct {
-		Path string `json:"path"`
-		Type string `json:"type"`
-	} `json:"files"`
-	Root         string `json:"root"`
+type fileWire struct {
+	Path         string `json:"path"`
+	Type         string `json:"type"`
+	Content      string `json:"content"`
+	AbsPath      string `json:"absPath"`
 	EditorScheme string `json:"editorScheme"`
 }
 
-func getFilesResponse(t *testing.T, srv *Server) (filesWire, map[string]json.RawMessage) {
+func getFileResponse(t *testing.T, srv *Server, relPath string) (fileWire, map[string]json.RawMessage) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/file?path="+url.QueryEscape(relPath), nil)
 	req.Host = "127.0.0.1:8686" // isAllowedHost はループバックしか通さない
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("GET /api/files status = %d, want 200", rec.Code)
+		t.Fatalf("GET /api/file status = %d, want 200", rec.Code)
 	}
-	var got filesWire
+	var got fileWire
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode body: %v (body=%q)", err, rec.Body.String())
 	}
@@ -60,28 +60,65 @@ func getFilesResponse(t *testing.T, srv *Server) (filesWire, map[string]json.Raw
 	return got, keys
 }
 
-func TestFilesResponseCarriesRootAndDefaultEditorScheme(t *testing.T) {
+func TestFileResponseCarriesAbsPathAndDefaultEditorScheme(t *testing.T) {
 	srv, root := newEditorTestServer(t)
 
-	got, keys := getFilesResponse(t, srv)
+	got, keys := getFileResponse(t, srv, "doc.md")
 
-	// フロント ( Sidebar.tsx ) が読むキー名そのものを固定する
-	for _, key := range []string{"files", "root", "editorScheme"} {
+	// フロント ( SplitView.tsx ) が読むキー名そのものを固定する
+	for _, key := range []string{"path", "type", "content", "absPath", "editorScheme"} {
 		if _, ok := keys[key]; !ok {
 			t.Errorf("response is missing key %q (got keys %v)", key, keysOf(keys))
 		}
 	}
 
-	if got.Root != filepath.ToSlash(root) {
-		t.Errorf("root = %q, want %q", got.Root, filepath.ToSlash(root))
+	// ResolveSecurePath はシンボリックリンクを解決するため ( macOSの /var は
+	// /private/var への symlink )、期待値も実体パスで組む
+	wantAbs := filepath.ToSlash(filepath.Join(evalSymlinks(t, root), "doc.md"))
+	if got.AbsPath != wantAbs {
+		t.Errorf("absPath = %q, want %q", got.AbsPath, wantAbs)
 	}
 	if got.EditorScheme != "vscode" {
 		t.Errorf("editorScheme = %q, want %q", got.EditorScheme, "vscode")
 	}
-	// 既存のfiles一覧が壊れていないことも同時に固定する
-	if len(got.Files) != 1 || got.Files[0].Path != "doc.md" {
-		t.Errorf("files = %+v, want single doc.md entry", got.Files)
+	// 既存フィールドが壊れていないことも同時に固定する
+	if got.Path != "doc.md" || got.Type != "markdown" || got.Content != "# doc\n" {
+		t.Errorf("path/type/content = %q/%q/%q, want doc.md/markdown/\"# doc\\n\"", got.Path, got.Type, got.Content)
 	}
+}
+
+// TestFilesResponseHasNoEditorFields は、エディタ用の情報が一覧APIには載らないことを
+// 固定する。絶対パスの露出点を「開いたファイルの取得」1箇所に閉じるための契約。
+func TestFilesResponseHasNoEditorFields(t *testing.T) {
+	srv, _ := newEditorTestServer(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/files", nil)
+	req.Host = "127.0.0.1:8686"
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/files status = %d, want 200", rec.Code)
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &keys); err != nil {
+		t.Fatalf("decode body as object: %v", err)
+	}
+	for _, key := range []string{"root", "absPath", "editorScheme"} {
+		if _, ok := keys[key]; ok {
+			t.Errorf("/api/files must not expose %q (got keys %v)", key, keysOf(keys))
+		}
+	}
+}
+
+// evalSymlinks はテストの期待値をサーバーと同じ実体パスに揃える。
+func evalSymlinks(t *testing.T, p string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", p, err)
+	}
+	return resolved
 }
 
 func keysOf(m map[string]json.RawMessage) []string {
@@ -93,26 +130,28 @@ func keysOf(m map[string]json.RawMessage) []string {
 	return out
 }
 
-// TestFilesResponseRootUsesSlashSeparators は、パス区切りの吸収がサーバー側にある
-// ことを固定する。フロントは受け取った root の "\" を区切りとして扱わないため、
+// TestFileResponseAbsPathUsesSlashSeparators は、パス区切りの吸収がサーバー側にある
+// ことを固定する。フロントは受け取った absPath の "\" を区切りとして扱わないため、
 // ここでネイティブ表記のまま返すとWindowsでリンクが壊れる。
-func TestFilesResponseRootUsesSlashSeparators(t *testing.T) {
+// POSIXでは filepath.ToSlash が恒等変換なので、この検査が実際に効くのはWindowsのみ。
+func TestFileResponseAbsPathUsesSlashSeparators(t *testing.T) {
 	srv, root := newEditorTestServer(t)
 
-	got, _ := getFilesResponse(t, srv)
+	got, _ := getFileResponse(t, srv, "doc.md")
 
-	if strings.Contains(got.Root, `\`) {
-		t.Errorf("root = %q, want no backslash separators", got.Root)
+	if strings.Contains(got.AbsPath, `\`) {
+		t.Errorf("absPath = %q, want no backslash separators", got.AbsPath)
 	}
-	if got.Root != filepath.ToSlash(root) {
-		t.Errorf("root = %q, want ToSlash(%q) = %q", got.Root, root, filepath.ToSlash(root))
+	want := filepath.ToSlash(filepath.Join(evalSymlinks(t, root), "doc.md"))
+	if got.AbsPath != want {
+		t.Errorf("absPath = %q, want %q", got.AbsPath, want)
 	}
 }
 
 func TestWithEditorSchemeOverridesResponse(t *testing.T) {
 	srv, _ := newEditorTestServer(t, WithEditorScheme("cursor"))
 
-	got, _ := getFilesResponse(t, srv)
+	got, _ := getFileResponse(t, srv, "doc.md")
 	if got.EditorScheme != "cursor" {
 		t.Errorf("editorScheme = %q, want %q", got.EditorScheme, "cursor")
 	}

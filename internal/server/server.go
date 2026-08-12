@@ -153,24 +153,25 @@ type FileEntry struct {
 	Type string `json:"type"`
 }
 
-// FilesResponse の Root は「エディタで開く」用のrootDir絶対パスを、URLに載せられるよう
-// 区切りをスラッシュへ揃えたもの ( filepath.ToSlash )。変換をサーバー側で行うのは実行OSを
-// 知っているのがサーバーだけだからで、フロントで一律に "\" を "/" へ潰すとPOSIXの正当な
-// ファイル名 ( ディレクトリ名に "\" を含むもの ) を壊す。WindowsのUNC ( \\server\share )
-// は先頭の "//" として残るため、フロント側で先頭スラッシュを削ってはならない。
-// OSユーザー名を含みうるためローカル起動時にしか返してはならず、公開構成では空にする。
-// 判定をサーバー側に置くのは、フロントで出し分けてもサーバーが絶対パスを返した時点で
-// すでに漏れているため。Rootが空のときフロントは「開く」ボタンを描画しない。
 type FilesResponse struct {
-	Files        []FileEntry `json:"files"`
-	Root         string      `json:"root"`
-	EditorScheme string      `json:"editorScheme"`
+	Files []FileEntry `json:"files"`
 }
 
+// FileResponse の AbsPath は「エディタで開く」用の絶対パスを、URLに載せられるよう区切りを
+// スラッシュへ揃えたもの ( filepath.ToSlash )。変換をサーバー側で行うのは実行OSを知って
+// いるのがサーバーだけだからで、フロントで一律に "\" を "/" へ潰すとPOSIXの正当なファイル名
+// ( ディレクトリ名に "\" を含むもの ) を壊す。WindowsのUNC ( \\server\share ) は先頭の
+// "//" として残るため、フロント側で先頭スラッシュを削ってはならない。
+//
+// OSユーザー名を含みうるためローカル起動時にしか返してはならず、公開構成では空にする。
+// 判定をサーバー側に置くのは、フロントで出し分けてもサーバーが絶対パスを返した時点で
+// すでに漏れているため。AbsPathが空のときフロントは鉛筆ボタンを描画しない。
 type FileResponse struct {
-	Path    string `json:"path"`
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Path         string `json:"path"`
+	Type         string `json:"type"`
+	Content      string `json:"content"`
+	AbsPath      string `json:"absPath"`
+	EditorScheme string `json:"editorScheme"`
 }
 
 // maxCommentBodyBytes は状態変更API ( POST/PATCH ) のリクエストボディ上限 ( 1MB )。
@@ -416,14 +417,8 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO(PR-C): publicOrigin が非nilなら Root を空にする。現時点では main.go に
-	// --listen も認証も無く公開経路自体が存在しないため、常に絶対パスを返している。
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(FilesResponse{
-		Files:        files,
-		Root:         filepath.ToSlash(s.rootDir),
-		EditorScheme: s.editorScheme,
-	})
+	json.NewEncoder(w).Encode(FilesResponse{Files: files})
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
@@ -466,11 +461,15 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		fileType = "html"
 	}
 
+	// TODO(PR-C): publicOrigin が非nilなら AbsPath を空にする。現時点では main.go に
+	// --listen も認証も無く公開経路自体が存在しないため、常に絶対パスを返している。
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(FileResponse{
-		Path:    filepath.ToSlash(relPath),
-		Type:    fileType,
-		Content: string(content),
+		Path:         filepath.ToSlash(relPath),
+		Type:         fileType,
+		Content:      string(content),
+		AbsPath:      filepath.ToSlash(resolved),
+		EditorScheme: s.editorScheme,
 	})
 }
 

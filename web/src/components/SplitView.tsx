@@ -9,12 +9,17 @@ import { renderHtml, renderHtmlLive } from '../renderer/html';
 import { ViewMode, getViewMode, setViewMode as persistViewMode } from '../lib/viewMode';
 import { useLiveAgentBridge, LiveAgentPickResult } from '../hooks/useLiveAgentBridge';
 import { useStaticPickBridge } from '../hooks/useStaticPickBridge';
+import { buildEditorUrl } from '../lib/editorLink';
 
 interface PaneData {
   path: string;
   type: 'markdown' | 'html';
   content: string;
   renderedHtml: string;
+  /** サーバーが解決した絶対パス。公開構成では空文字で、鉛筆ボタンを描画しない */
+  absPath: string;
+  /** エディタ起動に使うURLスキーム ( 既定 vscode ) */
+  editorScheme: string;
 }
 
 export interface PaneContentInfo {
@@ -121,6 +126,31 @@ function AddCommentButton({ armed, disabled, onToggle }: AddCommentButtonProps) 
     >
       {label}
     </button>
+  );
+}
+
+interface OpenInEditorLinkProps {
+  data: PaneData | null;
+}
+
+/**
+ * ファイルパスの横に置く鉛筆ボタン。サーバーが絶対パスを返さない構成 ( 公開時 ) では
+ * 何も描画しない。ラベルをアイコンにしているぶん、意味は title と aria-label で補う。
+ */
+function OpenInEditorLink({ data }: OpenInEditorLinkProps) {
+  if (!data) return null;
+  const url = buildEditorUrl(data.editorScheme, data.absPath);
+  if (!url) return null;
+
+  return (
+    <a
+      className="pane-open-editor-btn"
+      href={url}
+      title="エディタで開く"
+      aria-label="エディタで開く"
+    >
+      <span aria-hidden="true">✏️</span>
+    </a>
   );
 }
 
@@ -312,6 +342,8 @@ export function SplitView({
       type: data.type as 'markdown' | 'html',
       content: data.content,
       renderedHtml: rendered,
+      absPath: data.absPath || '',
+      editorScheme: data.editorScheme || '',
     };
   };
 
@@ -813,6 +845,7 @@ export function SplitView({
           <div className="pane-title">
             <span>{leftData?.type === 'markdown' ? '📝' : '🌐'}</span>
             <span>{leftPath}</span>
+            <OpenInEditorLink data={leftData} />
           </div>
           <div className="pane-actions">
             {leftData?.type === 'html' && (
@@ -892,6 +925,7 @@ export function SplitView({
             <div className="pane-title">
               <span>{rightData?.type === 'markdown' ? '📝' : '🌐'}</span>
               <span>{rightPath}</span>
+              <OpenInEditorLink data={rightData} />
             </div>
             <div className="pane-actions">
               {rightData?.type === 'html' && (
