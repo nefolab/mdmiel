@@ -129,6 +129,16 @@ function AddCommentButton({ armed, disabled, onToggle }: AddCommentButtonProps) 
   );
 }
 
+/**
+ * ペインの表示を先頭へ戻す。scrollTo ではなくプロパティ代入なのは、jsdom のように
+ * Element.prototype.scrollTo を持たない環境でも壊れないようにするため。
+ */
+function resetScroll(el: HTMLElement | null) {
+  if (!el) return;
+  el.scrollTop = 0;
+  el.scrollLeft = 0;
+}
+
 interface OpenInEditorLinkProps {
   data: PaneData | null;
   /** ヘッダーが今表示しているパス。data がこれに追いつくまでリンクは出さない */
@@ -400,6 +410,23 @@ export function SplitView({
       cancelled = true;
     };
   }, [rightPath, revision]);
+
+  // 別のファイルを開いたらペインの表示を先頭に戻す。.pane-content は overflow-y: auto の
+  // スクロール容器で、markdown では中身を差し替えるだけなので再マウントされず scrollTop が
+  // 前のファイルのまま残る ( HTMLペインのiframeはkeyにパスが入るので再マウントされる )。
+  //
+  // 依存を path だけにしているのは意図的。revision ( ライブリロード ) を入れると、同じ
+  // ファイルを編集しながら見ているときに保存のたび先頭へ飛んでしまう。
+  //
+  // データ到着ではなくパス変更で走らせるのも意図的。コメントリンクや ?line=N の自動
+  // スクロールはデータ到着後に走るため、ここで先に戻しておけば後勝ちで共存できる。
+  useLayoutEffect(() => {
+    resetScroll(leftContentRef.current);
+  }, [leftPath]);
+
+  useLayoutEffect(() => {
+    resetScroll(rightContentRef.current);
+  }, [rightPath]);
 
   // Share loaded pane content (path/type/content) with the parent so it can
   // pass raw file content down to CommentSidebar for rematchLine().
