@@ -157,9 +157,7 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-title" title={rootName || undefined}>
-        {rootName || 'ファイル一覧'}
-      </div>
+      <div className="sidebar-title">{rootName || 'ファイル一覧'}</div>
       {loading && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>読み込み中...</div>}
       {error && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-danger)' }}>エラー: {error}</div>}
       {!loading && !error && files.length === 0 && (

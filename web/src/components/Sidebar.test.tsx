@@ -39,9 +39,9 @@ function title(): HTMLElement {
 
 const files = [{ path: 'doc.md', type: 'markdown' }];
 
-// 見出しを大文字化しない ( .sidebar-title から text-transform: uppercase を外した ) ことは
-// ここでは検査できない。jsdomは外部CSSを適用せず、text-transform は textContent を変えない
-// ため。表示上の確認は実機で行う。
+// 見た目にしか現れない性質 ( 大文字化しない・長い名前を折り返す ) はここでは検査できない。
+// jsdomは外部CSSを適用せず、text-transform も overflow-wrap も textContent を変えないため。
+// ここで固定するのは「文字列を切り詰めていない」ことまでで、表示の確認は実機で行う。
 describe('サイドバーの見出し', () => {
   it('配信中のディレクトリ名を出す', async () => {
     await renderSidebar({ files, rootName: 'Workspace' });
@@ -68,10 +68,12 @@ describe('サイドバーの見出し', () => {
     expect(title().textContent?.trim()).toBe('ファイル一覧');
   });
 
-  it('省略表示に備えてtitle属性に全体を持つ', async () => {
-    await renderSidebar({ files, rootName: 'very-long-directory-name' });
+  it('長いディレクトリ名も省略せず全部出す', async () => {
+    const name = 'very-long-project-directory-name-that-wraps';
+    await renderSidebar({ files, rootName: name });
 
-    expect(title().getAttribute('title')).toBe('very-long-directory-name');
+    // 折り返して全文を見せる方針なので、切り詰めや ... を入れない
+    expect(title().textContent?.trim()).toBe(name);
   });
 
   it('ファイル一覧の描画は従来どおり', async () => {
