@@ -153,8 +153,28 @@ type FileEntry struct {
 	Type string `json:"type"`
 }
 
+// FilesResponse の RootName は配信中のディレクトリ名 ( 絶対パスではなく末尾の要素だけ )。
+// サイドバーの見出しに出す。ルート直下やドライブ直下で起動した場合は名前と呼べる値が
+// 取れないため空文字にし、フロント側の既定文言へフォールバックさせる。
 type FilesResponse struct {
-	Files []FileEntry `json:"files"`
+	Files    []FileEntry `json:"files"`
+	RootName string      `json:"rootName"`
+}
+
+// rootDisplayName は rootDir の末尾要素を返す。ファイルシステムのルートやドライブ直下
+// のように区切りしか残らない場合は、見出しとして意味を成さないので空文字を返す。
+//
+// rootDir は絶対パスに正規化済みであることを前提とする ( cmd/mdmiel が filepath.Abs を
+// 通してから NewServer に渡す )。相対パスをそのまま渡すと ".." がそのまま名前になる。
+// Windowsのドライブ直下・UNC共有ルートは filepath.Base がボリューム部分を落とすため、
+// ここに来る時点で "\" になっており下の判定で拾える。
+func rootDisplayName(rootDir string) string {
+	name := filepath.Base(rootDir)
+	// "." は空文字や相対の現在地、"/" と "\" は区切りだけが残った形
+	if name == "." || name == "/" || name == `\` {
+		return ""
+	}
+	return name
 }
 
 // FileResponse の AbsPath は「エディタで開く」用の絶対パスを、URLに載せられるよう区切りを
@@ -418,7 +438,10 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(FilesResponse{Files: files})
+	json.NewEncoder(w).Encode(FilesResponse{
+		Files:    files,
+		RootName: rootDisplayName(s.rootDir),
+	})
 }
 
 func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
@@ -463,6 +486,8 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 
 	// TODO(PR-C): publicOrigin が非nilなら AbsPath を空にする。現時点では main.go に
 	// --listen も認証も無く公開経路自体が存在しないため、常に絶対パスを返している。
+	// FilesResponse.RootName も同じ公開ポリシーの対象にすること ( 絶対パスほどではないが、
+	// ホスト側のディレクトリ名は文書ツリー外のメタデータではある )。
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(FileResponse{
 		Path:         filepath.ToSlash(relPath),

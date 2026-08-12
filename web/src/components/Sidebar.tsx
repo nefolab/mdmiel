@@ -50,6 +50,8 @@ function buildTree(files: FileItem[]): TreeNode {
 
 export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: SidebarProps) {
   const [files, setFiles] = useState<FileItem[]>([]);
+  // 配信中のディレクトリ名。サーバーが名前を取れない場合 ( ルート直下等 ) は空文字
+  const [rootName, setRootName] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<{ [path: string]: boolean }>({});
@@ -64,6 +66,7 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
       .then((data) => {
         if (!cancelled) {
           setFiles(data.files || []);
+          setRootName(data.rootName || '');
           setError(null);
           setLoading(false);
         }
@@ -154,7 +157,7 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-title">ファイル一覧</div>
+      <div className="sidebar-title">{rootName || 'ファイル一覧'}</div>
       {loading && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>読み込み中...</div>}
       {error && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-danger)' }}>エラー: {error}</div>}
       {!loading && !error && files.length === 0 && (

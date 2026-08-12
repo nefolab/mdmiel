@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -112,9 +113,10 @@ func TestFilesResponseHasNoEditorFields(t *testing.T) {
 		t.Fatalf("decode body as object: %v", err)
 	}
 	// ブラックリストだと別名 ( workspaceRoot 等 ) で絶対パスを足す変異を通すため、
-	// トップレベルキーが files だけであることを厳密に固定する
-	if got := keysOf(keys); len(got) != 1 || got[0] != "files" {
-		t.Errorf("/api/files top-level keys = %v, want [files] only", got)
+	// トップレベルキーを厳密に固定する。rootName はディレクトリ名だけで絶対パスではない
+	want := []string{"files", "rootName"}
+	if got := keysOf(keys); !slices.Equal(got, want) {
+		t.Errorf("/api/files top-level keys = %v, want %v", got, want)
 	}
 }
 

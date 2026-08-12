@@ -228,13 +228,19 @@ body {
   overflow-y: auto;
 }
 
+/* 配信中のディレクトリ名を出す。固有名詞なので uppercase 変換はしない
+   ( 変換すると ~/Workspace が WORKSPACE になり、実際のフォルダ名と読めなくなる )。
+   長い名前は省略せず折り返す。切れた名前はどのフォルダを開いているのか判別できず、
+   見出しとしての役割を果たさないため。区切りの無い長い名前でも溢れないよう
+   overflow-wrap で強制的に折る */
 .sidebar-title {
   font-size: 12px;
-  text-transform: uppercase;
   color: var(--color-muted);
   padding: 16px 16px 8px 16px;
   font-weight: 600;
-  letter-spacing: 1px;
+  letter-spacing: 0.5px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
 }
 
 .file-list {
