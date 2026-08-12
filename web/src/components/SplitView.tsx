@@ -9,12 +9,17 @@ import { renderHtml, renderHtmlLive } from '../renderer/html';
 import { ViewMode, getViewMode, setViewMode as persistViewMode } from '../lib/viewMode';
 import { useLiveAgentBridge, LiveAgentPickResult } from '../hooks/useLiveAgentBridge';
 import { useStaticPickBridge } from '../hooks/useStaticPickBridge';
+import { buildEditorUrl } from '../lib/editorLink';
 
 interface PaneData {
   path: string;
   type: 'markdown' | 'html';
   content: string;
   renderedHtml: string;
+  /** サーバーが解決した絶対パス。公開構成では空文字で、鉛筆ボタンを描画しない */
+  absPath: string;
+  /** エディタ起動に使うURLスキーム ( 既定 vscode ) */
+  editorScheme: string;
 }
 
 export interface PaneContentInfo {
@@ -121,6 +126,37 @@ function AddCommentButton({ armed, disabled, onToggle }: AddCommentButtonProps) 
     >
       {label}
     </button>
+  );
+}
+
+interface OpenInEditorLinkProps {
+  data: PaneData | null;
+  /** ヘッダーが今表示しているパス。data がこれに追いつくまでリンクは出さない */
+  path?: string;
+}
+
+/**
+ * ファイルパスの横に置く鉛筆ボタン。サーバーが絶対パスを返さない構成 ( 公開時 ) では
+ * 何も描画しない。ラベルをアイコンにしているぶん、意味は title と aria-label で補う。
+ *
+ * ファイルを切り替えると、ヘッダーの表示パスは即座に新しい値になるのに data は前の
+ * ファイルのまま残る ( 新しい fetch が解決するまで )。その間にクリックすると表示とは
+ * 別のファイルが開いてしまうため、data.path が現在のパスと一致するときだけ描画する。
+ */
+function OpenInEditorLink({ data, path }: OpenInEditorLinkProps) {
+  if (!data || data.path !== path) return null;
+  const url = buildEditorUrl(data.editorScheme, data.absPath);
+  if (!url) return null;
+
+  return (
+    <a
+      className="pane-open-editor-btn"
+      href={url}
+      title="エディタで開く"
+      aria-label="エディタで開く"
+    >
+      <span aria-hidden="true">✏️</span>
+    </a>
   );
 }
 
@@ -312,6 +348,8 @@ export function SplitView({
       type: data.type as 'markdown' | 'html',
       content: data.content,
       renderedHtml: rendered,
+      absPath: data.absPath || '',
+      editorScheme: data.editorScheme || '',
     };
   };
 
@@ -812,7 +850,8 @@ export function SplitView({
         <div className="pane-header">
           <div className="pane-title">
             <span>{leftData?.type === 'markdown' ? '📝' : '🌐'}</span>
-            <span>{leftPath}</span>
+            <span className="pane-title-path">{leftPath}</span>
+            <OpenInEditorLink data={leftData} path={leftPath} />
           </div>
           <div className="pane-actions">
             {leftData?.type === 'html' && (
@@ -891,7 +930,8 @@ export function SplitView({
           <div className="pane-header">
             <div className="pane-title">
               <span>{rightData?.type === 'markdown' ? '📝' : '🌐'}</span>
-              <span>{rightPath}</span>
+              <span className="pane-title-path">{rightPath}</span>
+              <OpenInEditorLink data={rightData} path={rightPath} />
             </div>
             <div className="pane-actions">
               {rightData?.type === 'html' && (

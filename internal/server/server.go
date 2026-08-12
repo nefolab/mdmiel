@@ -31,6 +31,34 @@ type Server struct {
 	startLiveReloadOnce sync.Once
 	logger              *slog.Logger // NewServerで必ず設定される ( 既定は slog.Default() )
 	authMW              auth.Middleware
+	editorScheme        string // NewServerで必ず設定される ( 既定は defaultEditorScheme )
+}
+
+// defaultEditorScheme は「エディタで開く」に使うURLスキームの既定値。
+const defaultEditorScheme = "vscode"
+
+// editorSchemePattern はURLスキームとして受け付ける文字種。RFC 3986 のスキーム文法に
+// 合わせて先頭を英字に限り、以降は英数字とハイフンだけを許す。"://" やスラッシュ入りの
+// 値はここで弾かれる。RFC が許す "+" と "." は意図的に落としてある ( vscode /
+// vscode-insiders / cursor はこの範囲に収まるため、実用上の不足は今のところ無い )。
+var editorSchemePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9-]*$`)
+
+// deniedEditorSchemes はブラウザが自前で解釈するスキーム。生成したURLはフロントの
+// アンカーの href に入るため、javascript: のようにページ内でコードが動くものや、
+// 意図せぬネットワーク送信を招くものは文字種の検査とは別に名指しで拒否する。
+// 設定するのは利用者自身だが、誤設定が「ファイル名にJavaScriptを仕込める」状態に
+// 直結するため、fail-closedにしておく。
+var deniedEditorSchemes = map[string]bool{
+	"javascript": true,
+	"vbscript":   true,
+	"data":       true,
+	"blob":       true,
+	"file":       true,
+	"http":       true,
+	"https":      true,
+	"about":      true,
+	"ws":         true,
+	"wss":        true,
 }
 
 // Option は NewServer の任意設定。検証が必要な設定 ( 将来の認証・公開Origin等 ) を
@@ -60,6 +88,22 @@ func WithAuth(mw auth.Middleware) Option {
 	}
 }
 
+// WithEditorScheme は「エディタで開く」のURLスキームを差し替える ( 既定は "vscode" )。
+// 空文字・英数字とハイフン以外を含む値・先頭が英字でない値・ブラウザが自前で解釈する
+// スキームは error で弾く。
+func WithEditorScheme(scheme string) Option {
+	return func(s *Server) error {
+		if !editorSchemePattern.MatchString(scheme) {
+			return fmt.Errorf("WithEditorScheme: invalid scheme %q (must start with a letter; allowed: letters, digits, hyphen)", scheme)
+		}
+		if deniedEditorSchemes[strings.ToLower(scheme)] {
+			return fmt.Errorf("WithEditorScheme: scheme %q is handled by the browser and must not be used", scheme)
+		}
+		s.editorScheme = scheme
+		return nil
+	}
+}
+
 // NewServer はrootDir配下を配信するmdmielサーバーを作る。
 // stは行コメントの永続化先 ( 通常はstore.NewFileStore(rootDir) ) を注入する。
 func NewServer(rootDir string, webDist embed.FS, st store.Store, opts ...Option) (*Server, error) {
@@ -74,6 +118,8 @@ func NewServer(rootDir string, webDist embed.FS, st store.Store, opts ...Option)
 		store:   st,
 		hub:     newEventHub(),
 		logger:  slog.Default(),
+
+		editorScheme: defaultEditorScheme,
 	}
 	for _, opt := range opts {
 		if opt == nil {
@@ -111,10 +157,21 @@ type FilesResponse struct {
 	Files []FileEntry `json:"files"`
 }
 
+// FileResponse の AbsPath は「エディタで開く」用の絶対パスを、URLに載せられるよう区切りを
+// スラッシュへ揃えたもの ( filepath.ToSlash )。変換をサーバー側で行うのは実行OSを知って
+// いるのがサーバーだけだからで、フロントで一律に "\" を "/" へ潰すとPOSIXの正当なファイル名
+// ( ディレクトリ名に "\" を含むもの ) を壊す。WindowsのUNC ( \\server\share ) は先頭の
+// "//" として残るため、フロント側で先頭スラッシュを削ってはならない。
+//
+// OSユーザー名を含みうるためローカル起動時にしか返してはならず、公開構成では空にする。
+// 判定をサーバー側に置くのは、フロントで出し分けてもサーバーが絶対パスを返した時点で
+// すでに漏れているため。AbsPathが空のときフロントは鉛筆ボタンを描画しない。
 type FileResponse struct {
-	Path    string `json:"path"`
-	Type    string `json:"type"`
-	Content string `json:"content"`
+	Path         string `json:"path"`
+	Type         string `json:"type"`
+	Content      string `json:"content"`
+	AbsPath      string `json:"absPath"`
+	EditorScheme string `json:"editorScheme"`
 }
 
 // maxCommentBodyBytes は状態変更API ( POST/PATCH ) のリクエストボディ上限 ( 1MB )。
@@ -404,11 +461,15 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		fileType = "html"
 	}
 
+	// TODO(PR-C): publicOrigin が非nilなら AbsPath を空にする。現時点では main.go に
+	// --listen も認証も無く公開経路自体が存在しないため、常に絶対パスを返している。
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(FileResponse{
-		Path:    filepath.ToSlash(relPath),
-		Type:    fileType,
-		Content: string(content),
+		Path:         filepath.ToSlash(relPath),
+		Type:         fileType,
+		Content:      string(content),
+		AbsPath:      filepath.ToSlash(resolved),
+		EditorScheme: s.editorScheme,
 	})
 }
 
