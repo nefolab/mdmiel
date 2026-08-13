@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { filterFiles, getAncestorDirectories } from '../lib/fileFilter';
 
 interface FileItem {
   path: string;
@@ -15,6 +16,8 @@ interface TreeNode {
 
 export interface SidebarProps {
   revision: number;
+  sidebarOpen: boolean;
+  query: string;
   activeLeft?: string;
   activeRight?: string;
   onSelectFile: (path: string, pane: 'left' | 'right') => void;
@@ -48,7 +51,14 @@ function buildTree(files: FileItem[]): TreeNode {
   return root;
 }
 
-export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: SidebarProps) {
+export function Sidebar({
+  activeLeft,
+  activeRight,
+  onSelectFile,
+  query,
+  revision,
+  sidebarOpen,
+}: SidebarProps) {
   const [files, setFiles] = useState<FileItem[]>([]);
   // 配信中のディレクトリ名。サーバーが名前を取れない場合 ( ルート直下等 ) は空文字
   const [rootName, setRootName] = useState('');
@@ -84,6 +94,11 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
     setCollapsed((prev) => ({ ...prev, [path]: !prev[path] }));
   };
 
+  const searchActive = query.trim() !== '';
+  const filteredFiles = filterFiles(files, query);
+  const expandedDirectories = getAncestorDirectories(filteredFiles);
+  const tree = buildTree(filteredFiles);
+
   const renderNode = (node: TreeNode, depth: number): React.ReactNode => {
     if (node.path === '') {
       return Object.values(node.children)
@@ -94,13 +109,16 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
         .map((child) => renderNode(child, 0));
     }
 
-    const isCollapsed = collapsed[node.path];
+    const isCollapsed = searchActive && expandedDirectories.has(node.path)
+      ? false
+      : collapsed[node.path];
     const isSelectedLeft = activeLeft === node.path;
     const isSelectedRight = activeRight === node.path;
     const isActive = isSelectedLeft || isSelectedRight;
 
     const handleClick = (e: React.MouseEvent) => {
       if (node.isDir) {
+        if (searchActive) return;
         toggleCollapse(node.path);
       } else {
         const pane = e.shiftKey ? 'right' : 'left';
@@ -116,7 +134,7 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
     return (
       <div key={node.path} style={{ paddingLeft: `${depth > 0 ? 8 : 0}px` }}>
         <div
-          className={`file-item ${isActive ? 'active' : ''}`}
+          className={`file-item ${isActive ? 'active' : ''} ${node.isDir && searchActive ? 'search-expanded' : ''}`.trim()}
           onClick={handleClick}
         >
           <div className="file-info">
@@ -153,17 +171,20 @@ export function Sidebar({ activeLeft, activeRight, onSelectFile, revision }: Sid
     );
   };
 
-  const tree = buildTree(files);
-
   return (
-    <aside className="sidebar">
+    <aside id="file-sidebar" className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`.trim()}>
       <div className="sidebar-title">{rootName || 'ファイル一覧'}</div>
       {loading && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>読み込み中...</div>}
       {error && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-danger)' }}>エラー: {error}</div>}
+      {!loading && !error && files.length > 0 && searchActive && filteredFiles.length === 0 && (
+        <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>該当なし</div>
+      )}
       {!loading && !error && files.length === 0 && (
         <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>ファイルがありません</div>
       )}
-      {!loading && !error && <div className="file-list">{renderNode(tree, 0)}</div>}
+      {!loading && !error && filteredFiles.length > 0 && (
+        <div className="file-list">{renderNode(tree, 0)}</div>
+      )}
     </aside>
   );
 }

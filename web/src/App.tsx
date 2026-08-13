@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type ChangeEvent } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { SplitView, PaneContentInfo } from './components/SplitView';
 import { CommentSidebar, CommentSidebarPaneInfo } from './components/CommentSidebar';
@@ -9,6 +9,7 @@ import { listComments, getComment } from './lib/commentsApi';
 import { Theme, getInitialTheme, applyTheme } from './lib/theme';
 import { setViewMode } from './lib/viewMode';
 import { useLiveReload } from './lib/liveReload';
+import { getSidebarOpen, setSidebarOpen as persistSidebarOpen } from './lib/sidebarState';
 
 export default function App() {
   const revision = useLiveReload();
@@ -16,6 +17,8 @@ export default function App() {
   const [navNonce, setNavNonce] = useState(0);
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
   const [commentsPanelOpen, setCommentsPanelOpen] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(() => getSidebarOpen());
+  const [query, setQuery] = useState('');
   const [commentsRefreshKey, setCommentsRefreshKey] = useState(0);
   const [paneContents, setPaneContents] = useState<{
     left?: PaneContentInfo;
@@ -117,6 +120,20 @@ export default function App() {
 
   const reloadComments = () => setCommentsRefreshKey((k) => k + 1);
 
+  const handleToggleSidebar = () => {
+    const nextOpen = !sidebarOpen;
+    setSidebarOpen(nextOpen);
+    persistSidebarOpen(nextOpen);
+  };
+
+  const handleQueryChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextQuery = event.target.value;
+    setQuery(nextQuery);
+    if (nextQuery.trim() !== '') {
+      setSidebarOpen(true);
+    }
+  };
+
   const handleSelectFile = (path: string, pane: 'left' | 'right') => {
     let newState: ViewState = {};
     if (pane === 'left') {
@@ -217,9 +234,25 @@ export default function App() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       <header className="app-header">
-        <div className="logo-container">
-          <span className="logo-icon">📝</span>
-          <span className="logo-title">mdmiel</span>
+        <div className="header-navigation">
+          <button
+            className="sidebar-toggle-btn"
+            onClick={handleToggleSidebar}
+            aria-expanded={sidebarOpen}
+            aria-controls="file-sidebar"
+            aria-label="サイドバーの表示切替"
+            title={sidebarOpen ? 'サイドバーを閉じる' : 'サイドバーを開く'}
+          >
+            <span aria-hidden="true">☰</span>
+          </button>
+          <input
+            className="file-search-input"
+            type="search"
+            value={query}
+            onChange={handleQueryChange}
+            placeholder="ファイルを検索"
+            aria-label="ファイルを検索"
+          />
         </div>
         <div className="header-actions">
           <div className="theme-switcher">
@@ -263,6 +296,8 @@ export default function App() {
       <div className="app-container">
         <Sidebar
           revision={revision}
+          sidebarOpen={sidebarOpen}
+          query={query}
           activeLeft={viewState.path || viewState.left}
           activeRight={viewState.right}
           onSelectFile={handleSelectFile}

@@ -1,7 +1,7 @@
 import { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Sidebar } from './Sidebar';
+import { Sidebar, type SidebarProps } from './Sidebar';
 
 let root: Root;
 let mount: HTMLDivElement;
@@ -19,7 +19,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function renderSidebar(payload: unknown) {
+async function renderSidebar(payload: unknown, props: Partial<SidebarProps> = {}) {
   vi.stubGlobal(
     'fetch',
     vi.fn().mockResolvedValue({
@@ -29,7 +29,35 @@ async function renderSidebar(payload: unknown) {
   );
 
   await act(async () => {
-    root.render(<Sidebar revision={0} onSelectFile={() => {}} />);
+    root.render(
+      <Sidebar
+        revision={0}
+        sidebarOpen
+        query=""
+        onSelectFile={() => {}}
+        {...props}
+      />
+    );
+  });
+}
+
+function rerenderSidebar(props: Partial<SidebarProps>) {
+  act(() => {
+    root.render(
+      <Sidebar
+        revision={0}
+        sidebarOpen
+        query=""
+        onSelectFile={() => {}}
+        {...props}
+      />
+    );
+  });
+}
+
+function click(element: Element) {
+  act(() => {
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 }
 
@@ -54,6 +82,14 @@ describe('サイドバーの見出し', () => {
 
     expect(title().textContent?.trim()).toBe('Workspace');
     expect(mount.textContent).toContain('ファイルがありません');
+    expect(mount.textContent).not.toContain('該当なし');
+  });
+
+  it('ファイルが1件も無ければ検索中でも「ファイルがありません」だけを出す', async () => {
+    await renderSidebar({ files: [], rootName: 'Workspace' }, { query: 'spec' });
+
+    expect(mount.textContent).toContain('ファイルがありません');
+    expect(mount.textContent).not.toContain('該当なし');
   });
 
   it('rootNameが空なら既定文言にフォールバックする', async () => {
@@ -80,6 +116,105 @@ describe('サイドバーの見出し', () => {
     await renderSidebar({ files, rootName: 'Workspace' });
 
     expect(mount.querySelectorAll('.file-item').length).toBe(1);
+    expect(mount.textContent).toContain('doc.md');
+  });
+});
+
+describe('ファイル検索', () => {
+  const nestedFiles = [
+    { path: 'docs/design/spec.md', type: 'markdown' },
+    { path: 'docs/guide.md', type: 'markdown' },
+    { path: 'other.html', type: 'html' },
+  ];
+
+  it('一致しないファイルを描画しない', async () => {
+    await renderSidebar({ files: nestedFiles }, { query: 'spec' });
+
+    expect(mount.textContent).toContain('spec.md');
+    expect(mount.textContent).not.toContain('guide.md');
+    expect(mount.textContent).not.toContain('other.html');
+  });
+
+  it('ヒットしたファイルの祖先ディレクトリを自動展開する', async () => {
+    await renderSidebar({ files: nestedFiles });
+    click(Array.from(mount.querySelectorAll('.file-name')).find((node) => node.textContent === 'docs')!);
+
+    rerenderSidebar({ query: 'spec' });
+
+    expect(mount.textContent).toContain('design');
+    expect(mount.textContent).toContain('spec.md');
+    expect(
+      Array.from(mount.querySelectorAll('.file-item')).find((item) => item.textContent?.includes('docs'))
+        ?.querySelector('.file-icon')?.textContent
+    ).toBe('📂');
+  });
+
+  it('ヒットが0件なら「該当なし」を表示する', async () => {
+    await renderSidebar({ files: nestedFiles }, { query: 'missing' });
+
+    expect(mount.textContent).toContain('該当なし');
+    expect(mount.textContent).not.toContain('ファイルがありません');
+    expect(mount.querySelectorAll('.file-item')).toHaveLength(0);
+  });
+
+  it('検索中のディレクトリクリックは折りたたみ状態を変更しない', async () => {
+    await renderSidebar({ files: nestedFiles }, { query: 'spec' });
+    const docs = Array.from(mount.querySelectorAll('.file-item')).find((item) =>
+      item.textContent?.includes('docs')
+    )!;
+
+    expect(docs.classList.contains('search-expanded')).toBe(true);
+    click(docs);
+    rerenderSidebar({ query: '' });
+
+    expect(mount.textContent).toContain('spec.md');
+    expect(docs.querySelector('.file-icon')?.textContent).toBe('📂');
+  });
+
+  it('検索中もファイル行を選択できる', async () => {
+    const onSelectFile = vi.fn();
+    await renderSidebar(
+      { files: nestedFiles },
+      { query: 'spec', onSelectFile }
+    );
+
+    click(Array.from(mount.querySelectorAll('.file-item')).find((item) =>
+      item.textContent?.includes('spec.md')
+    )!);
+
+    expect(onSelectFile).toHaveBeenCalledWith('docs/design/spec.md', 'left');
+  });
+
+  it('検索を解除してもユーザーの折りたたみ状態を維持する', async () => {
+    await renderSidebar({ files: nestedFiles });
+    click(Array.from(mount.querySelectorAll('.file-name')).find((node) => node.textContent === 'docs')!);
+    expect(mount.textContent).not.toContain('spec.md');
+
+    rerenderSidebar({ query: 'spec' });
+    expect(mount.textContent).toContain('spec.md');
+
+    rerenderSidebar({ query: '' });
+    expect(mount.textContent).not.toContain('spec.md');
+    expect(
+      Array.from(mount.querySelectorAll('.file-item')).find((item) => item.textContent?.includes('docs'))
+        ?.querySelector('.file-icon')?.textContent
+    ).toBe('📁');
+  });
+});
+
+describe('サイドバーの開閉', () => {
+  it('aria-controlsの参照先になるIDを持つ', async () => {
+    await renderSidebar({ files });
+
+    expect(mount.querySelector('aside')?.id).toBe('file-sidebar');
+  });
+
+  it('閉じてもDOMからは削除しない', async () => {
+    await renderSidebar({ files }, { sidebarOpen: false });
+
+    const sidebar = mount.querySelector('.sidebar');
+    expect(sidebar).not.toBeNull();
+    expect(sidebar?.classList.contains('collapsed')).toBe(true);
     expect(mount.textContent).toContain('doc.md');
   });
 });
