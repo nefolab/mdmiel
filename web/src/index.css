@@ -733,6 +733,11 @@ body {
   word-break: normal;
 }
 
+.markdown-body pre code.hljs {
+  background: transparent;
+  padding: 0;
+}
+
 .markdown-body ul,
 .markdown-body ol {
   padding-left: 2em;
