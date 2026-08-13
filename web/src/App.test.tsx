@@ -16,7 +16,13 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 // watch what App hands down, not what the children render. SplitView is the only stub
 // that reports anything back — the navNonce prop, which is what these tests are about.
 vi.mock('./components/Sidebar', () => ({
-  Sidebar: () => <div className="sidebar-probe" />,
+  Sidebar: ({ sidebarOpen, query }: { sidebarOpen: boolean; query: string }) => (
+    <aside
+      id="file-sidebar"
+      className={`sidebar-probe ${sidebarOpen ? '' : 'collapsed'}`}
+      data-query={query}
+    />
+  ),
 }));
 vi.mock('./components/CommentSidebar', () => ({
   CommentSidebar: () => <div className="comment-sidebar-probe" />,
@@ -63,25 +69,139 @@ async function flushNativeHashChange() {
   });
 }
 
-beforeEach(async () => {
-  vi.mocked(getComment).mockReset();
-  window.history.replaceState(null, '', '#');
+async function mountApp() {
   mount = document.createElement('div');
   document.body.appendChild(mount);
   root = createRoot(mount);
   await act(async () => {
     root!.render(<App />);
   });
-});
+}
 
-afterEach(async () => {
+async function unmountApp() {
   await act(async () => {
     root?.unmount();
   });
   mount?.remove();
   root = undefined;
   mount = undefined;
+}
+
+beforeEach(async () => {
+  vi.mocked(getComment).mockReset();
+  localStorage.clear();
   window.history.replaceState(null, '', '#');
+  await mountApp();
+});
+
+afterEach(async () => {
+  await unmountApp();
+  window.history.replaceState(null, '', '#');
+});
+
+function sidebarProbe(): HTMLElement {
+  return mount!.querySelector<HTMLElement>('.sidebar-probe')!;
+}
+
+function sidebarToggle(): HTMLButtonElement {
+  return mount!.querySelector<HTMLButtonElement>('[aria-controls="file-sidebar"]')!;
+}
+
+function searchInput(): HTMLInputElement {
+  return mount!.querySelector<HTMLInputElement>('input[aria-label="ファイルを検索"]')!;
+}
+
+function click(element: Element) {
+  act(() => {
+    element.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  });
+}
+
+function typeSearch(value: string) {
+  act(() => {
+    const input = searchInput();
+    const nativeValueSetter = Object.getOwnPropertyDescriptor(
+      HTMLInputElement.prototype,
+      'value'
+    )?.set;
+    nativeValueSetter?.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+describe('App header', () => {
+  it('ロゴのアイコンとラベルを描画しない', () => {
+    expect(mount?.querySelector('.logo-icon')).toBeNull();
+    expect(mount?.querySelector('.logo-title')).toBeNull();
+    expect(mount?.textContent).not.toContain('📝');
+  });
+
+  it('localStorageに保存された閉じた状態を初回描画で復元する', async () => {
+    await unmountApp();
+    localStorage.clear();
+    localStorage.setItem('mdmiel-sidebar-open', 'false');
+    await mountApp();
+
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(true);
+    expect(sidebarToggle().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('開閉ボタンでサイドバーの表示を切り替える', () => {
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(false);
+    expect(sidebarToggle().getAttribute('aria-expanded')).toBe('true');
+    expect(sidebarToggle().getAttribute('aria-label')).toBe('サイドバーの表示切替');
+    expect(sidebarToggle().querySelector('span')?.getAttribute('aria-hidden')).toBe('true');
+
+    click(sidebarToggle());
+
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(true);
+    expect(sidebarToggle().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('開閉状態をlocalStorageに永続化する', () => {
+    click(sidebarToggle());
+    expect(localStorage.getItem('mdmiel-sidebar-open')).toBe('false');
+
+    click(sidebarToggle());
+    expect(localStorage.getItem('mdmiel-sidebar-open')).toBe('true');
+  });
+
+  it('検索ボックスの入力をサイドバーに渡す', () => {
+    typeSearch('docs');
+    expect(sidebarProbe().dataset.query).toBe('docs');
+  });
+
+  it('閉じた状態で検索するとサイドバーを自動で開く', () => {
+    click(sidebarToggle());
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(true);
+
+    typeSearch('spec');
+
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(false);
+    expect(sidebarToggle().getAttribute('aria-expanded')).toBe('true');
+    expect(localStorage.getItem('mdmiel-sidebar-open')).toBe('false');
+  });
+
+  it('閉じた状態で検索語を空にしてもサイドバーを開かない', () => {
+    typeSearch('spec');
+    click(sidebarToggle());
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(true);
+
+    typeSearch('');
+
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(true);
+    expect(sidebarToggle().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('閉じた状態で空白だけを入力してもサイドバーを開かない', () => {
+    click(sidebarToggle());
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(true);
+
+    typeSearch('   ');
+
+    expect(sidebarProbe().classList.contains('collapsed')).toBe(true);
+    expect(sidebarToggle().getAttribute('aria-expanded')).toBe('false');
+  });
 });
 
 describe('App navNonce', () => {
