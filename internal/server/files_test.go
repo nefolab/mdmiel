@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -76,19 +77,39 @@ func TestFilesResponseCarriesRootName(t *testing.T) {
 	}
 }
 
-// newFilesTestServer は隠しファイル・隠しディレクトリ・サブディレクトリを含む
-// ルートディレクトリでサーバーを組み立てる。
-func newFilesTestServer(t *testing.T) (*Server, string) {
+// filesFixtureContent は一覧に出るべき通常ファイルとその本文。
+// クエリのエスケープが要る名前 ( 空白・& ・日本語 ) を混ぜてあるのは、テストだけが
+// 開けない / テストだけが開ける状況を作らないため。
+var filesFixtureContent = map[string]string{
+	"normal.md":     "# normal\n",
+	"page.html":     "<h1>page</h1>\n",
+	"subdir/sub.md": "# sub\n",
+	"仕様 & メモ.md":    "# 仕様\n",
+}
+
+// newFilesTestServer は隠しファイル・隠しディレクトリ・サブディレクトリに加え、
+// プラットフォーム固有の実体 ( シンボリックリンク・FIFO等 ) を含むルートで
+// サーバーを組み立てる。mustList / mustNotList は一覧の期待値。
+func newFilesTestServer(t *testing.T) (srv *Server, root string, mustList, mustNotList []string) {
 	t.Helper()
-	root := t.TempDir()
+	parent := t.TempDir()
+	root = filepath.Join(parent, "root")
+	outside := filepath.Join(parent, "outside")
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("# secret\n"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+
 	files := map[string]string{
-		"normal.md":               "# normal\n",
-		"page.html":               "<h1>page</h1>\n",
 		".hidden.md":              "# hidden\n",
 		".env":                    "SECRET=1\n",
-		"subdir/sub.md":           "# sub\n",
 		".hiddendir/inside.md":    "# inside\n",
 		"node_modules/pkg/doc.md": "# dep\n",
+	}
+	for rel, content := range filesFixtureContent {
+		files[rel] = content
 	}
 	for rel, content := range files {
 		full := filepath.Join(root, filepath.FromSlash(rel))
@@ -99,20 +120,33 @@ func newFilesTestServer(t *testing.T) (*Server, string) {
 			t.Fatalf("write %s: %v", rel, err)
 		}
 	}
+
+	for rel := range filesFixtureContent {
+		mustList = append(mustList, rel)
+	}
+	mustNotList = []string{".hidden.md", ".env", ".hiddendir/inside.md", "node_modules/pkg/doc.md"}
+
+	extraList, extraNotList := addPlatformFixtures(t, root, outside)
+	mustList = append(mustList, extraList...)
+	mustNotList = append(mustNotList, extraNotList...)
+
 	srv, err := NewServer(root, web.Dist, store.NewFileStore(root))
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
-	return srv, root
+	return srv, root, mustList, mustNotList
 }
 
-// TestFilesListOnlyContainsOpenableEntries は「一覧に出たものは必ず開ける」という
-// 不変条件を固定する。ResolveSecurePath は "." 始まりセグメントを403にするため、
-// handleFiles がドット始まりファイルを載せると死んだエントリになる ( 2026-08-15の実バグ )。
-// 除外規則を個別に確認するのではなく、一覧の全エントリを実際に GET することで、
-// 将来どちらか片方の規則だけが変わった場合にも落ちるようにしている。
+// TestFilesListOnlyContainsOpenableEntries は「/api/files が返したパスは必ず
+// /api/file で開ける」という不変条件を固定する。
+//
+// 個々の除外規則ではなく不変条件そのものを検証するのは、一覧側と取得側の判定が
+// 別々に育つと死んだエントリが生まれるため ( 2026-08-15に実際に起きた )。ドット始まり
+// ファイルだけでなく、ディレクトリへのシンボリックリンク・ルート外へのリンク・
+// バックスラッシュ入りの名前・FIFOも同じ形で反例になることを確認済み。
+// ステータスだけでなく本文まで照合するのは、200を返しつつ中身が空の実装を通さないため。
 func TestFilesListOnlyContainsOpenableEntries(t *testing.T) {
-	srv, _ := newFilesTestServer(t)
+	srv, _, mustList, mustNotList := newFilesTestServer(t)
 
 	got := getFilesResponse(t, srv)
 
@@ -120,25 +154,49 @@ func TestFilesListOnlyContainsOpenableEntries(t *testing.T) {
 		t.Fatal("files list is empty; fixture or walk logic is broken")
 	}
 	for _, f := range got.Files {
-		req := httptest.NewRequest(http.MethodGet, "/api/file?path="+f.Path, nil)
+		// 本番のフロントは encodeURIComponent を通すので、テストも同じ形で送る
+		// ( 素の連結だと "&" 入りの名前をテストだけが開けないと誤判定する )
+		req := httptest.NewRequest(http.MethodGet, "/api/file?path="+url.QueryEscape(f.Path), nil)
 		req.Host = "127.0.0.1:8686"
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
 			t.Errorf("listed file %q is not openable: GET /api/file status = %d, want 200", f.Path, rec.Code)
+			continue
+		}
+		var body struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Errorf("decode /api/file body for %q: %v", f.Path, err)
+			continue
+		}
+		if want, ok := filesFixtureContent[f.Path]; ok && body.Content != want {
+			t.Errorf("content for %q = %q, want %q", f.Path, body.Content, want)
 		}
 	}
 
-	// 期待する一覧そのものも固定する ( 全件除外して空にすれば上のループは通ってしまうため )
-	want := []string{"normal.md", "page.html", "subdir/sub.md"}
+	// 一覧そのものも固定する ( 全件除外して空にすれば上のループは通ってしまうため )
+	listed := make(map[string]bool, len(got.Files))
 	var paths []string
 	for _, f := range got.Files {
+		listed[f.Path] = true
 		paths = append(paths, f.Path)
 	}
 	sort.Strings(paths)
-	sort.Strings(want)
-	if strings.Join(paths, ",") != strings.Join(want, ",") {
-		t.Errorf("files = %v, want %v", paths, want)
+	for _, want := range mustList {
+		if !listed[want] {
+			t.Errorf("%q must be listed but is missing (files = %v)", want, paths)
+		}
+	}
+	for _, unwanted := range mustNotList {
+		if listed[unwanted] {
+			t.Errorf("%q must not be listed (files = %v)", unwanted, paths)
+		}
+	}
+	if len(paths) != len(mustList) {
+		t.Errorf("files = %v, want exactly %v", paths, mustList)
 	}
 }
 
@@ -147,7 +205,7 @@ func TestFilesListOnlyContainsOpenableEntries(t *testing.T) {
 // サーバー不具合として報告されていた ( 2026-08-15の実バグ )。/raw/ 側は既に403のため、
 // 同じ入力に対する応答をここで揃える。
 func TestFileAPIRejectsDirectory(t *testing.T) {
-	srv, _ := newFilesTestServer(t)
+	srv, _, _, _ := newFilesTestServer(t)
 
 	for _, target := range []string{"/api/file?path=subdir", "/raw/subdir"} {
 		t.Run(target, func(t *testing.T) {
@@ -166,7 +224,7 @@ func TestFileAPIRejectsDirectory(t *testing.T) {
 // 固定する。resolveTargetPath は実在チェックだけを行っていたため、開くことのできない
 // 対象にコメントを作成できていた ( 2026-08-15の実バグ )。
 func TestCommentsAPIRejectsDirectory(t *testing.T) {
-	srv, root := newFilesTestServer(t)
+	srv, root, _, _ := newFilesTestServer(t)
 
 	body := `{"path":"subdir","anchor":{"line":1,"snippet":"x","snippetHash":"h"},"body":"dir comment"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/comments", strings.NewReader(body))

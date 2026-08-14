@@ -406,16 +406,19 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		if fsutil.IsExcludedFile(d.Name()) {
-			return nil
-		}
-
 		rel, err := filepath.Rel(s.rootDir, p)
 		if err != nil {
 			return nil
 		}
 		// Windowsのパス区切りをスラッシュに変換
 		relSlash := filepath.ToSlash(rel)
+
+		// 取得と同じ判定を通ったものだけを載せる。ドット始まりファイル・ディレクトリへの
+		// シンボリックリンク・ルート外へのリンク・バックスラッシュを含む名前・FIFOは
+		// いずれもここで落ちる ( どれも一覧に出しても開けない )。
+		if _, err := s.resolveDocument(relSlash); err != nil {
+			return nil
+		}
 
 		ext := strings.ToLower(filepath.Ext(p))
 		var fileType string
@@ -455,7 +458,9 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resolved, err := ResolveSecurePath(s.rootDir, relPath)
+	// ディレクトリ等を拒否するのは handleRaw と同じ扱い。ReadFile に渡すと EISDIR が
+	// internalError 経由で500になり、利用者の入力ミスがサーバー側の不具合として報告される。
+	resolved, err := s.resolveDocument(relPath)
 	if err != nil {
 		if errors.Is(err, ErrForbidden) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
@@ -466,23 +471,6 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.internalError(w, r, err)
-		return
-	}
-
-	// ディレクトリへのアクセスは拒否する ( handleRaw と同じ扱い )。
-	// ReadFile に渡すと EISDIR が internalError 経由で500になり、利用者の入力ミスが
-	// サーバー側の不具合として報告されてしまう。
-	info, err := os.Stat(resolved)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "Not Found", http.StatusNotFound)
-			return
-		}
-		s.internalError(w, r, err)
-		return
-	}
-	if info.IsDir() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -591,13 +579,49 @@ func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// resolveDocument は相対パスを「配信できる文書」として解決する。
+// 一覧・本文取得・コメント対象の検証がこの1か所を共有することで、
+// 「/api/files が返したパスは必ず /api/file で開ける」という不変条件を構造的に保つ。
+// 判定を各ハンドラに散らすと、片方だけが変わったときに死んだエントリが生まれる。
+//
+// 返すエラーは ResolveSecurePath と同じ分類 ( ErrForbidden / os.ErrNotExist / その他 )
+// なので、呼び出し側はそのままHTTPステータスへ写像できる。
+//
+// 制約: ここでの判定と、呼び出し側の読み取りは別操作なので、その間に対象を差し替えられる
+// TOCTOUは防げない ( path.go に同じ趣旨の記載あり )。解消するには判定と読み取りを同じ
+// ファイル記述子に束ねる os.Root 系への移行が要る。ループバック固定のローカル用途では
+// 影響が小さいため、ここでは種別判定を読み取りより前に置くことだけを保証する。
+func (s *Server) resolveDocument(relPath string) (string, error) {
+	resolved, err := ResolveSecurePath(s.rootDir, relPath)
+	if err != nil {
+		return "", err
+	}
+
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", err
+	}
+	// 通常ファイル以外 ( ディレクトリ・FIFO・ソケット・デバイス ) は配信対象外。
+	// 特にFIFOは種別を見ずに開くと、os.ReadFile が書き手を待って戻らずリクエストが
+	// ハングするため、読み取りに入る前に弾く必要がある。
+	// os.Stat はリンクを辿るので、ルート内の通常ファイルを指すシンボリックリンクは
+	// ここを通過する ( 意図的に許可している )。
+	if !info.Mode().IsRegular() {
+		return "", ErrForbidden
+	}
+
+	return resolved, nil
+}
+
 // resolveTargetPath はコメントAPIのpathパラメータをResolveSecurePathで検証する。
 // 検証NGの場合はレスポンスを書き込んでokにfalseを返す ( 呼び出し元はそのままreturnする )。
 //
 // ResolveSecurePathは存在しないパスでも境界が安全なら解決済みパスを返すため、
 // 「実在するファイルにのみコメントを許可する」条件はここで明示的に担保する。
 func (s *Server) resolveTargetPath(w http.ResponseWriter, r *http.Request, relPath string) (resolved string, ok bool) {
-	resolved, err := ResolveSecurePath(s.rootDir, relPath)
+	// 閲覧できない対象にはコメントを貼れない。許すと、どのペインにも表示できない
+	// 対象に紐づくコメントが永続化されてしまう。
+	resolved, err := s.resolveDocument(relPath)
 	if err != nil {
 		if errors.Is(err, ErrForbidden) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
@@ -608,22 +632,6 @@ func (s *Server) resolveTargetPath(w http.ResponseWriter, r *http.Request, relPa
 			return "", false
 		}
 		s.internalError(w, r, err)
-		return "", false
-	}
-
-	info, err := os.Stat(resolved)
-	if err != nil {
-		if os.IsNotExist(err) {
-			http.Error(w, "Not Found", http.StatusNotFound)
-			return "", false
-		}
-		s.internalError(w, r, err)
-		return "", false
-	}
-	// ディレクトリは閲覧対象になり得ないので、コメントの貼り付け先としても拒否する。
-	// 許すと、開くことのできない対象に紐づくコメントが永続化されてしまう。
-	if info.IsDir() {
-		http.Error(w, "Forbidden", http.StatusForbidden)
 		return "", false
 	}
 

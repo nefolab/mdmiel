@@ -355,4 +355,48 @@ describe('App comment loading errors', () => {
     expect(errorBanner()).not.toBeNull();
     expect(errorBanner()!.textContent).toContain('コメントへのリンクを開けませんでした');
   });
+
+  // 取得が終わるまで前のファイルの付箋を渡し続けると、SplitViewはそれを現在の文書上に
+  // 配置してしまう ( 別文書のコメントが貼られて見える )。失敗時だけでなく、切替した瞬間に
+  // 空にすることを固定する。
+  it('切替直後の取得中に前のファイルの付箋を渡さない', async () => {
+    vi.mocked(listComments).mockResolvedValue([comment('c1', 'a.md')]);
+    await navigate('#/view?path=a.md');
+    await flushNativeHashChange();
+    expect(leftCommentCount()).toBe('1');
+
+    // b.mdの取得を未完了のまま保留する
+    vi.mocked(listComments).mockReturnValue(new Promise(() => {}));
+    await navigate('#/view?path=b.md');
+    await flushNativeHashChange();
+
+    expect(leftCommentCount()).toBe('0');
+  });
+
+  // 2つのエラー発生源が同じ状態を共有していると、無関係な成功が直前のリンクエラーを
+  // 消してしまう。発生源ごとに独立していることを固定する。
+  it('ペイン取得の成功でコメントリンクのエラーを消さない', async () => {
+    let resolveList: ((comments: Comment[]) => void) | undefined;
+    vi.mocked(listComments).mockReturnValue(
+      new Promise<Comment[]>((resolve) => {
+        resolveList = resolve;
+      })
+    );
+    await navigate('#/view?path=a.md');
+    await flushNativeHashChange();
+
+    // 保留中に、解決できないコメントリンクへ移動する
+    vi.mocked(getComment).mockRejectedValue(new Error('not found'));
+    await navigate('#/comment/missing');
+    await flushNativeHashChange();
+    expect(errorBanner()?.textContent).toContain('コメントへのリンクを開けませんでした');
+
+    // 保留していたペイン取得が後から成功しても、リンクのエラーは残る
+    await act(async () => {
+      resolveList!([]);
+    });
+    await flushNativeHashChange();
+
+    expect(errorBanner()?.textContent).toContain('コメントへのリンクを開けませんでした');
+  });
 });

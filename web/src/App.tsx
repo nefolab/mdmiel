@@ -1,4 +1,4 @@
-import { useState, useEffect, type ChangeEvent } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { SplitView, PaneContentInfo } from './components/SplitView';
 import { CommentSidebar, CommentSidebarPaneInfo } from './components/CommentSidebar';
@@ -30,8 +30,17 @@ export default function App() {
   });
   // Comment loading is the one fetch with no visible surface of its own: a failed load
   // just yields no sticky notes, which is indistinguishable from a file that has none.
-  // This message makes that difference visible; it is cleared by the next successful load.
-  const [commentsError, setCommentsError] = useState<string | null>(null);
+  // These messages make that difference visible.
+  //
+  // The two sources are kept apart on purpose. They fail independently and clear on
+  // different events, so sharing one slot lets an unrelated pane reload wipe the message
+  // about a link the user just followed (or the reverse).
+  const [commentsLoadError, setCommentsLoadError] = useState<string | null>(null);
+  const [commentRouteError, setCommentRouteError] = useState<string | null>(null);
+  // Which path each pane's comments were fetched for. A pane whose displayed file has moved
+  // on must not keep showing the previous file's notes while the new request is in flight —
+  // SplitView positions whatever it is handed, so stale notes land on the wrong document.
+  const loadedCommentPaths = useRef<{ left?: string; right?: string }>({});
   // Per-pane unresolved (orphaned + missing) comment ids, reported by each pane's
   // StickyNoteLayer via SplitView's onUnresolvedChange. Stale ids left behind by a pane
   // that closed or switched files are harmless: collectUnresolvedComments filters ids
@@ -61,6 +70,8 @@ export default function App() {
     const processHash = () => {
       const hash = window.location.hash;
       const route = parseCommentRoute(hash);
+      // Any navigation retires the previous link error: it described the URL being left.
+      setCommentRouteError(null);
       if (route) {
         getComment(route.id)
           .then((comment) => {
@@ -80,7 +91,7 @@ export default function App() {
           .catch((err) => {
             console.error('コメントの取得に失敗しました:', err);
             if (!cancelled) {
-              setCommentsError(
+              setCommentRouteError(
                 'コメントへのリンクを開けませんでした。削除済みか、URLが正しくない可能性があります。'
               );
             }
@@ -106,31 +117,36 @@ export default function App() {
   // Fetch comments per pane whenever the shown files or a refresh signal change.
   // Lifted here so both the overlay sticky notes and the sidebar share one source.
   //
-  // A failed load empties that pane instead of keeping what was already there: the
-  // leftover list belongs to the file shown before the switch, so keeping it would
-  // pin another document's sticky notes onto the current one. The banner below
-  // reports the failure rather than leaving the empty pane looking comment-free.
+  // A pane is emptied as soon as its file changes and again if the load fails, so the notes
+  // on screen always belong to the file on screen — never to the one it replaced, and never
+  // to a request that did not arrive. The banner covers the failure case, which would
+  // otherwise be indistinguishable from a file with no comments.
   useEffect(() => {
     let cancelled = false;
+    const clear = (pane: 'left' | 'right') =>
+      setCommentsByPane((prev) => (prev[pane].length ? { ...prev, [pane]: [] } : prev));
+
     const load = async (pane: 'left' | 'right', path?: string): Promise<boolean> => {
-      if (!path) {
-        setCommentsByPane((prev) => (prev[pane].length ? { ...prev, [pane]: [] } : prev));
-        return true;
+      if (loadedCommentPaths.current[pane] !== path) {
+        loadedCommentPaths.current[pane] = path;
+        clear(pane);
       }
+      if (!path) return true;
       try {
         const comments = await listComments(path);
         if (!cancelled) setCommentsByPane((prev) => ({ ...prev, [pane]: comments }));
         return true;
       } catch (err) {
         console.error('コメント取得に失敗しました', err);
-        if (!cancelled) setCommentsByPane((prev) => (prev[pane].length ? { ...prev, [pane]: [] } : prev));
+        if (!cancelled) clear(pane);
         return false;
       }
     };
+
     void Promise.all([load('left', leftPath), load('right', rightPath)]).then((results) => {
       if (cancelled) return;
       const failed = results.some((ok) => !ok);
-      setCommentsError(failed ? 'コメントの取得に失敗しました。付箋は表示できていません。' : null);
+      setCommentsLoadError(failed ? 'コメントの取得に失敗しました。付箋は表示できていません。' : null);
     });
     return () => {
       cancelled = true;
@@ -312,12 +328,15 @@ export default function App() {
           </button>
         </div>
       </header>
-      {commentsError && (
+      {(commentRouteError ?? commentsLoadError) && (
         <div className="app-error-banner" role="alert">
-          <span aria-hidden="true">⚠</span> {commentsError}
+          <span aria-hidden="true">⚠</span> {commentRouteError ?? commentsLoadError}
           <button
             className="app-error-banner-dismiss"
-            onClick={() => setCommentsError(null)}
+            onClick={() => {
+              setCommentRouteError(null);
+              setCommentsLoadError(null);
+            }}
             aria-label="エラー表示を閉じる"
           >
             ✕
