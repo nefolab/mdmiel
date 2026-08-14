@@ -406,6 +406,10 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
+		if fsutil.IsExcludedFile(d.Name()) {
+			return nil
+		}
+
 		rel, err := filepath.Rel(s.rootDir, p)
 		if err != nil {
 			return nil
@@ -462,6 +466,23 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.internalError(w, r, err)
+		return
+	}
+
+	// ディレクトリへのアクセスは拒否する ( handleRaw と同じ扱い )。
+	// ReadFile に渡すと EISDIR が internalError 経由で500になり、利用者の入力ミスが
+	// サーバー側の不具合として報告されてしまう。
+	info, err := os.Stat(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, "Not Found", http.StatusNotFound)
+			return
+		}
+		s.internalError(w, r, err)
+		return
+	}
+	if info.IsDir() {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return
 	}
 
@@ -590,12 +611,19 @@ func (s *Server) resolveTargetPath(w http.ResponseWriter, r *http.Request, relPa
 		return "", false
 	}
 
-	if _, err := os.Stat(resolved); err != nil {
+	info, err := os.Stat(resolved)
+	if err != nil {
 		if os.IsNotExist(err) {
 			http.Error(w, "Not Found", http.StatusNotFound)
 			return "", false
 		}
 		s.internalError(w, r, err)
+		return "", false
+	}
+	// ディレクトリは閲覧対象になり得ないので、コメントの貼り付け先としても拒否する。
+	// 許すと、開くことのできない対象に紐づくコメントが永続化されてしまう。
+	if info.IsDir() {
+		http.Error(w, "Forbidden", http.StatusForbidden)
 		return "", false
 	}
 

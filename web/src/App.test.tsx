@@ -2,7 +2,7 @@ import { act } from 'react';
 import { createRoot, Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from './App';
-import { getComment } from './lib/commentsApi';
+import { getComment, listComments } from './lib/commentsApi';
 import { Comment } from './lib/comments';
 
 declare global {
@@ -28,8 +28,12 @@ vi.mock('./components/CommentSidebar', () => ({
   CommentSidebar: () => <div className="comment-sidebar-probe" />,
 }));
 vi.mock('./components/SplitView', () => ({
-  SplitView: ({ navNonce }: { navNonce?: number }) => (
-    <div className="split-view-probe" data-nav-nonce={String(navNonce ?? '')} />
+  SplitView: ({ navNonce, leftComments }: { navNonce?: number; leftComments?: Comment[] }) => (
+    <div
+      className="split-view-probe"
+      data-nav-nonce={String(navNonce ?? '')}
+      data-left-comments={String(leftComments?.length ?? 0)}
+    />
   ),
 }));
 vi.mock('./lib/liveReload', () => ({
@@ -89,6 +93,10 @@ async function unmountApp() {
 
 beforeEach(async () => {
   vi.mocked(getComment).mockReset();
+  // A rejecting listComments left over from an error test would otherwise leak into the
+  // next one, so the default (an empty list) is restored per test.
+  vi.mocked(listComments).mockReset();
+  vi.mocked(listComments).mockResolvedValue([]);
   localStorage.clear();
   window.history.replaceState(null, '', '#');
   await mountApp();
@@ -273,5 +281,78 @@ describe('App navNonce', () => {
       expect(window.location.hash).toBe('#/view?path=a.md');
       expect(currentNavNonce()).toBe('2');
     });
+  });
+});
+
+// コメント取得の失敗はconsole.errorだけで、画面上は「コメントが0件のファイル」と
+// 区別が付かなかった ( 2026-08-15の実バグ )。付箋が出ない理由を利用者に見せることを固定する。
+describe('App comment loading errors', () => {
+  function errorBanner(): HTMLElement | null {
+    return mount!.querySelector<HTMLElement>('.app-error-banner');
+  }
+
+  function leftCommentCount(): string {
+    return mount!.querySelector('.split-view-probe')?.getAttribute('data-left-comments') ?? '';
+  }
+
+  const comment = (id: string, path: string): Comment => ({
+    version: 1,
+    id,
+    path,
+    body: 'x',
+    author: 'me',
+    createdAt: '',
+    resolved: false,
+    anchor: { line: 1, snippet: '', snippetHash: '' },
+  });
+
+  it('コメント取得に失敗したらエラーを表示する', async () => {
+    vi.mocked(listComments).mockRejectedValue(new Error('network down'));
+
+    await navigate('#/view?path=a.md');
+    await flushNativeHashChange();
+
+    expect(errorBanner()).not.toBeNull();
+    expect(errorBanner()!.textContent).toContain('コメントの取得に失敗しました');
+    expect(errorBanner()!.getAttribute('role')).toBe('alert');
+  });
+
+  it('取得に失敗したペインに前のファイルの付箋を残さない', async () => {
+    vi.mocked(listComments).mockResolvedValue([comment('c1', 'a.md')]);
+    await navigate('#/view?path=a.md');
+    await flushNativeHashChange();
+    expect(leftCommentCount()).toBe('1');
+
+    vi.mocked(listComments).mockRejectedValue(new Error('network down'));
+    await navigate('#/view?path=b.md');
+    await flushNativeHashChange();
+
+    // 別ファイルの付箋が残ると、b.mdに存在しないコメントを表示してしまう
+    expect(leftCommentCount()).toBe('0');
+    expect(errorBanner()).not.toBeNull();
+  });
+
+  it('再取得に成功したらエラー表示を消す', async () => {
+    vi.mocked(listComments).mockRejectedValue(new Error('network down'));
+    await navigate('#/view?path=a.md');
+    await flushNativeHashChange();
+    expect(errorBanner()).not.toBeNull();
+
+    vi.mocked(listComments).mockResolvedValue([comment('c1', 'b.md')]);
+    await navigate('#/view?path=b.md');
+    await flushNativeHashChange();
+
+    expect(errorBanner()).toBeNull();
+    expect(leftCommentCount()).toBe('1');
+  });
+
+  it('コメントリンクの解決に失敗したらエラーを表示する', async () => {
+    vi.mocked(getComment).mockRejectedValue(new Error('not found'));
+
+    await navigate('#/comment/missing');
+    await flushNativeHashChange();
+
+    expect(errorBanner()).not.toBeNull();
+    expect(errorBanner()!.textContent).toContain('コメントへのリンクを開けませんでした');
   });
 });

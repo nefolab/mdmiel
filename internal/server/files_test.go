@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -72,6 +73,124 @@ func TestFilesResponseCarriesRootName(t *testing.T) {
 	// 一覧が壊れていないことも同時に固定する
 	if len(got.Files) != 1 || got.Files[0].Path != "doc.md" {
 		t.Errorf("files = %+v, want single doc.md entry", got.Files)
+	}
+}
+
+// newFilesTestServer は隠しファイル・隠しディレクトリ・サブディレクトリを含む
+// ルートディレクトリでサーバーを組み立てる。
+func newFilesTestServer(t *testing.T) (*Server, string) {
+	t.Helper()
+	root := t.TempDir()
+	files := map[string]string{
+		"normal.md":               "# normal\n",
+		"page.html":               "<h1>page</h1>\n",
+		".hidden.md":              "# hidden\n",
+		".env":                    "SECRET=1\n",
+		"subdir/sub.md":           "# sub\n",
+		".hiddendir/inside.md":    "# inside\n",
+		"node_modules/pkg/doc.md": "# dep\n",
+	}
+	for rel, content := range files {
+		full := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatalf("mkdir for %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+	}
+	srv, err := NewServer(root, web.Dist, store.NewFileStore(root))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	return srv, root
+}
+
+// TestFilesListOnlyContainsOpenableEntries は「一覧に出たものは必ず開ける」という
+// 不変条件を固定する。ResolveSecurePath は "." 始まりセグメントを403にするため、
+// handleFiles がドット始まりファイルを載せると死んだエントリになる ( 2026-08-15の実バグ )。
+// 除外規則を個別に確認するのではなく、一覧の全エントリを実際に GET することで、
+// 将来どちらか片方の規則だけが変わった場合にも落ちるようにしている。
+func TestFilesListOnlyContainsOpenableEntries(t *testing.T) {
+	srv, _ := newFilesTestServer(t)
+
+	got := getFilesResponse(t, srv)
+
+	if len(got.Files) == 0 {
+		t.Fatal("files list is empty; fixture or walk logic is broken")
+	}
+	for _, f := range got.Files {
+		req := httptest.NewRequest(http.MethodGet, "/api/file?path="+f.Path, nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Errorf("listed file %q is not openable: GET /api/file status = %d, want 200", f.Path, rec.Code)
+		}
+	}
+
+	// 期待する一覧そのものも固定する ( 全件除外して空にすれば上のループは通ってしまうため )
+	want := []string{"normal.md", "page.html", "subdir/sub.md"}
+	var paths []string
+	for _, f := range got.Files {
+		paths = append(paths, f.Path)
+	}
+	sort.Strings(paths)
+	sort.Strings(want)
+	if strings.Join(paths, ",") != strings.Join(want, ",") {
+		t.Errorf("files = %v, want %v", paths, want)
+	}
+}
+
+// TestFileAPIRejectsDirectory は、ディレクトリ指定が500ではなく403になることを固定する。
+// os.ReadFile に渡すと EISDIR が internalError 経由で500になり、利用者の入力ミスが
+// サーバー不具合として報告されていた ( 2026-08-15の実バグ )。/raw/ 側は既に403のため、
+// 同じ入力に対する応答をここで揃える。
+func TestFileAPIRejectsDirectory(t *testing.T) {
+	srv, _ := newFilesTestServer(t)
+
+	for _, target := range []string{"/api/file?path=subdir", "/raw/subdir"} {
+		t.Run(target, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, target, nil)
+			req.Host = "127.0.0.1:8686"
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusForbidden {
+				t.Errorf("status = %d, want 403 (body=%q)", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// TestCommentsAPIRejectsDirectory は、ディレクトリ宛のコメントが永続化されないことを
+// 固定する。resolveTargetPath は実在チェックだけを行っていたため、開くことのできない
+// 対象にコメントを作成できていた ( 2026-08-15の実バグ )。
+func TestCommentsAPIRejectsDirectory(t *testing.T) {
+	srv, root := newFilesTestServer(t)
+
+	body := `{"path":"subdir","anchor":{"line":1,"snippet":"x","snippetHash":"h"},"body":"dir comment"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/comments", strings.NewReader(body))
+	req.Host = "127.0.0.1:8686"
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("POST /api/comments status = %d, want 403 (body=%q)", rec.Code, rec.Body.String())
+	}
+	// ステータスだけでなく、副作用が無いことも確認する
+	entries, err := os.ReadDir(filepath.Join(root, ".mdmiel", "comments"))
+	if err == nil && len(entries) > 0 {
+		t.Errorf("comment files were persisted for a directory target: %d entries", len(entries))
+	}
+
+	// 一覧・取得も同じ扱いになること
+	getReq := httptest.NewRequest(http.MethodGet, "/api/comments?path=subdir", nil)
+	getReq.Host = "127.0.0.1:8686"
+	getRec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusForbidden {
+		t.Errorf("GET /api/comments status = %d, want 403", getRec.Code)
 	}
 }
 

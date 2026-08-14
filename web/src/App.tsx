@@ -28,6 +28,10 @@ export default function App() {
     left: [],
     right: [],
   });
+  // Comment loading is the one fetch with no visible surface of its own: a failed load
+  // just yields no sticky notes, which is indistinguishable from a file that has none.
+  // This message makes that difference visible; it is cleared by the next successful load.
+  const [commentsError, setCommentsError] = useState<string | null>(null);
   // Per-pane unresolved (orphaned + missing) comment ids, reported by each pane's
   // StickyNoteLayer via SplitView's onUnresolvedChange. Stale ids left behind by a pane
   // that closed or switched files are harmless: collectUnresolvedComments filters ids
@@ -50,8 +54,8 @@ export default function App() {
   // route. The latter isn't a real view state by itself: it resolves the comment via the API,
   // then rewrites the hash to "#/view?path=<comment.path>" (which re-enters this same handler
   // and falls through to the normal parseHash path) while remembering the target comment id
-  // for SplitView's scroll+flash. Unknown ids are logged and otherwise left on the "select a
-  // file" fallback screen (no toast mechanism exists at this level).
+  // for SplitView's scroll+flash. Unknown ids stay on the "select a file" fallback screen
+  // and report themselves through the error banner (SplitView's toast is out of reach here).
   useEffect(() => {
     let cancelled = false;
     const processHash = () => {
@@ -74,7 +78,12 @@ export default function App() {
             window.location.hash = generateHash({ path: comment.path });
           })
           .catch((err) => {
-            if (!cancelled) console.error('コメントの取得に失敗しました:', err);
+            console.error('コメントの取得に失敗しました:', err);
+            if (!cancelled) {
+              setCommentsError(
+                'コメントへのリンクを開けませんでした。削除済みか、URLが正しくない可能性があります。'
+              );
+            }
           });
         return;
       }
@@ -96,23 +105,33 @@ export default function App() {
 
   // Fetch comments per pane whenever the shown files or a refresh signal change.
   // Lifted here so both the overlay sticky notes and the sidebar share one source.
+  //
+  // A failed load empties that pane instead of keeping what was already there: the
+  // leftover list belongs to the file shown before the switch, so keeping it would
+  // pin another document's sticky notes onto the current one. The banner below
+  // reports the failure rather than leaving the empty pane looking comment-free.
   useEffect(() => {
     let cancelled = false;
-    const load = (pane: 'left' | 'right', path?: string) => {
+    const load = async (pane: 'left' | 'right', path?: string): Promise<boolean> => {
       if (!path) {
         setCommentsByPane((prev) => (prev[pane].length ? { ...prev, [pane]: [] } : prev));
-        return;
+        return true;
       }
-      listComments(path)
-        .then((comments) => {
-          if (!cancelled) setCommentsByPane((prev) => ({ ...prev, [pane]: comments }));
-        })
-        .catch((err) => {
-          if (!cancelled) console.error('コメント取得に失敗しました', err);
-        });
+      try {
+        const comments = await listComments(path);
+        if (!cancelled) setCommentsByPane((prev) => ({ ...prev, [pane]: comments }));
+        return true;
+      } catch (err) {
+        console.error('コメント取得に失敗しました', err);
+        if (!cancelled) setCommentsByPane((prev) => (prev[pane].length ? { ...prev, [pane]: [] } : prev));
+        return false;
+      }
     };
-    load('left', leftPath);
-    load('right', rightPath);
+    void Promise.all([load('left', leftPath), load('right', rightPath)]).then((results) => {
+      if (cancelled) return;
+      const failed = results.some((ok) => !ok);
+      setCommentsError(failed ? 'コメントの取得に失敗しました。付箋は表示できていません。' : null);
+    });
     return () => {
       cancelled = true;
     };
@@ -293,6 +312,18 @@ export default function App() {
           </button>
         </div>
       </header>
+      {commentsError && (
+        <div className="app-error-banner" role="alert">
+          <span aria-hidden="true">⚠</span> {commentsError}
+          <button
+            className="app-error-banner-dismiss"
+            onClick={() => setCommentsError(null)}
+            aria-label="エラー表示を閉じる"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <div className="app-container">
         <Sidebar
           revision={revision}
