@@ -173,7 +173,7 @@ export function Sidebar({
 
   return (
     <aside id="file-sidebar" className={`sidebar ${sidebarOpen ? '' : 'collapsed'}`.trim()}>
-      <div className="sidebar-title">{rootName || 'ファイル一覧'}</div>
+      <div className="sidebar-title">{rootName ? `${rootName}/` : 'ファイル一覧'}</div>
       {loading && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-muted)' }}>読み込み中...</div>}
       {error && <div style={{ padding: '16px', fontSize: '14px', color: 'var(--color-danger)' }}>エラー: {error}</div>}
       {!loading && !error && files.length > 0 && searchActive && filteredFiles.length === 0 && (
