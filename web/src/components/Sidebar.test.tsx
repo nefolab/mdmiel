@@ -71,16 +71,16 @@ const files = [{ path: 'doc.md', type: 'markdown' }];
 // jsdomは外部CSSを適用せず、text-transform も overflow-wrap も textContent を変えないため。
 // ここで固定するのは「文字列を切り詰めていない」ことまでで、表示の確認は実機で行う。
 describe('サイドバーの見出し', () => {
-  it('配信中のディレクトリ名を出す', async () => {
+  it('配信中のディレクトリ名を末尾スラッシュ付きで出す', async () => {
     await renderSidebar({ files, rootName: 'Workspace' });
 
-    expect(title().textContent?.trim()).toBe('Workspace');
+    expect(title().textContent?.trim()).toBe('Workspace/');
   });
 
   it('ファイルが1件も無くても見出しは出す', async () => {
     await renderSidebar({ files: [], rootName: 'Workspace' });
 
-    expect(title().textContent?.trim()).toBe('Workspace');
+    expect(title().textContent?.trim()).toBe('Workspace/');
     expect(mount.textContent).toContain('ファイルがありません');
     expect(mount.textContent).not.toContain('該当なし');
   });
@@ -109,7 +109,7 @@ describe('サイドバーの見出し', () => {
     await renderSidebar({ files, rootName: name });
 
     // 折り返して全文を見せる方針なので、切り詰めや ... を入れない
-    expect(title().textContent?.trim()).toBe(name);
+    expect(title().textContent?.trim()).toBe(`${name}/`);
   });
 
   it('ファイル一覧の描画は従来どおり', async () => {
