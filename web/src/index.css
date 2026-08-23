@@ -452,10 +452,11 @@ body {
   gap: 6px;
   /* 長いパスで操作部を押し出さないよう、縮む側をタイトルに寄せる */
   min-width: 0;
+  flex: 1;
   overflow: hidden;
 }
 
-/* パス本体だけを省略表示にする ( アイコンと鉛筆は縮ませない ) */
+/* パス本体だけを省略表示にする ( 種別アイコンと操作ボタンは縮ませない ) */
 .pane-title-path {
   min-width: 0;
   overflow: hidden;
@@ -463,21 +464,45 @@ body {
   white-space: nowrap;
 }
 
-/* ファイルパスの右隣に置く鉛筆ボタン。パスが長い行でも折り返さないよう縮ませない */
-.pane-open-editor-btn {
+/* 鉛筆・コピーをファイル名から離してタイトル行の右へ寄せる。閉じる等の pane-actions の直前 */
+.pane-title-file-actions {
+  margin-left: auto;
   flex-shrink: 0;
-  text-decoration: none;
-  font-size: 12px;
-  line-height: 1;
-  padding: 3px;
-  border-radius: 4px;
-  opacity: 0.55;
-  transition: opacity 0.2s, background-color 0.2s;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.pane-open-editor-btn:hover {
-  opacity: 1;
-  background-color: var(--color-border);
+/* 閉じるボタン (.close-btn) と同じヒット領域・字サイズ。パスが長くても縮ませない */
+.pane-open-editor-btn,
+.pane-copy-content-btn {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  text-decoration: none;
+  font-size: 18px;
+  line-height: 1;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-muted);
+  transition: background-color 0.2s, color 0.2s;
+}
+
+button.pane-copy-content-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.pane-open-editor-btn:hover,
+.pane-copy-content-btn:hover {
+  background-color: var(--color-row-hover);
+  color: var(--color-text);
 }
 
 .pane-actions {
