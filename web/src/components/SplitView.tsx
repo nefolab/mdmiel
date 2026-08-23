@@ -170,6 +170,52 @@ function OpenInEditorLink({ data, path }: OpenInEditorLinkProps) {
   );
 }
 
+interface CopyFileContentButtonProps {
+  data: PaneData | null;
+  /** ヘッダーが今表示しているパス。data がこれに追いつくまでボタンは出さない */
+  path?: string;
+  onCopied: (message: string) => void;
+}
+
+/**
+ * ファイルパスの横に置くコピーボタン。表示中の生ソース ( markdown / html ) を
+ * クリップボードへ書く。レンダリング後のHTMLやライブDOMは対象にしない。
+ *
+ * 絶対パスは不要なので、公開構成 ( absPath 空 ) でも出す。ただしファイル切替中に
+ * 前のファイルをコピーしないよう、鉛筆と同じく data.path が現在のパスと一致する
+ * ときだけ描画する。
+ */
+function CopyFileContentButton({ data, path, onCopied }: CopyFileContentButtonProps) {
+  if (!data || data.path !== path) return null;
+
+  const handleClick = () => {
+    const fail = (err: unknown) => {
+      console.error('Failed to copy', err);
+      onCopied('コピーに失敗しました');
+    };
+    try {
+      navigator.clipboard
+        .writeText(data.content)
+        .then(() => onCopied('内容をコピーしました'))
+        .catch(fail);
+    } catch (err) {
+      fail(err);
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      className="pane-copy-content-btn"
+      onClick={handleClick}
+      title="内容をコピー"
+      aria-label="内容をコピー"
+    >
+      <span aria-hidden="true">📋</span>
+    </button>
+  );
+}
+
 export function SplitView({
   viewState,
   revision,
@@ -881,7 +927,10 @@ export function SplitView({
           <div className="pane-title">
             <span>{leftData?.type === 'markdown' ? '📝' : '🌐'}</span>
             <span className="pane-title-path">{leftPath}</span>
-            <OpenInEditorLink data={leftData} path={leftPath} />
+            <div className="pane-title-file-actions">
+              <OpenInEditorLink data={leftData} path={leftPath} />
+              <CopyFileContentButton data={leftData} path={leftPath} onCopied={showToast} />
+            </div>
           </div>
           <div className="pane-actions">
             {leftData?.type === 'html' && (
@@ -961,7 +1010,10 @@ export function SplitView({
             <div className="pane-title">
               <span>{rightData?.type === 'markdown' ? '📝' : '🌐'}</span>
               <span className="pane-title-path">{rightPath}</span>
-              <OpenInEditorLink data={rightData} path={rightPath} />
+              <div className="pane-title-file-actions">
+                <OpenInEditorLink data={rightData} path={rightPath} />
+                <CopyFileContentButton data={rightData} path={rightPath} onCopied={showToast} />
+              </div>
             </div>
             <div className="pane-actions">
               {rightData?.type === 'html' && (
