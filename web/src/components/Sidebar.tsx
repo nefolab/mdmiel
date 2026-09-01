@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { filterFiles, getAncestorDirectories } from '../lib/fileFilter';
+import { FileKind, fileKindIcon } from '../lib/fileKind';
 
 interface FileItem {
   path: string;
-  type: 'markdown' | 'html';
+  type: FileKind;
 }
 
 interface TreeNode {
   name: string;
   path: string;
-  type?: 'markdown' | 'html';
+  type?: FileKind;
   children: { [key: string]: TreeNode };
   isDir: boolean;
 }
@@ -139,7 +140,7 @@ export function Sidebar({
         >
           <div className="file-info">
             <span className="file-icon">
-              {node.isDir ? (isCollapsed ? '📁' : '📂') : (node.type === 'markdown' ? '📝' : '🌐')}
+              {node.isDir ? (isCollapsed ? '📁' : '📂') : fileKindIcon(node.type)}
             </span>
             <span className="file-name" title={node.name}>
               {node.name}
