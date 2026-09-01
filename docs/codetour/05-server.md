@@ -233,14 +233,8 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 		// Windowsのパス区切りをスラッシュに変換
 		relSlash := filepath.ToSlash(rel)
 
-		ext := strings.ToLower(filepath.Ext(p))
-		var fileType string
-		switch ext {
-		case ".md", ".markdown":
-			fileType = "markdown"
-		case ".html", ".htm":
-			fileType = "html"
-		default:
+		fileType, ok := fileTypeFromExt(filepath.Ext(p))
+		if !ok {
 			return nil
 		}
 
@@ -263,9 +257,25 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 読みどころ。
 
+```go
+func fileTypeFromExt(ext string) (string, bool) {
+	switch strings.ToLower(ext) {
+	case ".md", ".markdown":
+		return "markdown", true
+	case ".html", ".htm":
+		return "html", true
+	case ".csv":
+		return "csv", true
+	default:
+		return "", false
+	}
+}
+```
+
 - `filepath.WalkDir(root, fn)` はrootディレクトリを再帰的に走査し、見つけたエントリ ( ファイル・ディレクトリ ) ごとにコールバック `fn` を呼ぶ。コールバックが `filepath.SkipDir` を返すと、そのディレクトリの中身は走査せずスキップする。ここでは2箇所でこの戻り値を使い分けている。1つはアクセス不能なディレクトリに遭遇したときの防御的スキップ、もう1つは隠しディレクトリ・`node_modules`・`.mdmiel` を意図的に除外するためのスキップ
 - `strings.HasPrefix(name, ".") || name == "node_modules" || name == ".mdmiel"` で隠しディレクトリを除外している。`.mdmiel` は `.` で始まるので実は最初の条件だけで既に該当するが、「コメント保存用ディレクトリは一覧に出さない」という意図を読み手に明示するためあえて条件を分けて書いてある
-- 拡張子フィルタは `switch ext { case ".md", ".markdown": ...; case ".html", ".htm": ...; default: return nil }` という形。Goのswitchはcaseごとにカンマ区切りで複数値を書け、どれにも当たらなければ `default` に落ちる。ここでは対象外拡張子のファイルを `return nil` ( エラーではなく「このエントリは一覧に含めない」の意 ) で読み飛ばしている
+- 拡張子判定は `fileTypeFromExt` に集約してある。`.md` / `.markdown` → `markdown`、`.html` / `.htm` → `html`、`.csv` → `csv`。未知は ok=false で、一覧では `return nil` ( エラーではなく「このエントリは含めない」 )、本文取得では `type=unknown`。一覧と取得で同じ関数を使うのは、片方だけ拡張子を足して死んだエントリを生まないため
+- Goのswitchはcaseごとにカンマ区切りで複数値を書ける。`fileTypeFromExt` の `.md`, `.markdown` がその形
 - `filepath.ToSlash(rel)` はWindowsの `\` 区切りパスを `/` 区切りに変換する。フロントエンドに返すJSONのpathはOSに依存せず常にスラッシュ区切りに統一しておくことで、`GET /api/file?path=...` のクエリパラメータもスラッシュ前提で扱える
 
 ## 4. コメントAPI: リクエストのデコードとバリデーション

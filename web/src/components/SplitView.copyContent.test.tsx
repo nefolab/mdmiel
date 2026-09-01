@@ -38,7 +38,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-type FileSpec = { type: 'markdown' | 'html'; content: string };
+type FileSpec = { type: 'markdown' | 'html' | 'csv'; content: string };
 
 /**
  * 指定したファイル集合で SplitView を描画する。rootDir を渡すと absPath を付け、
@@ -149,6 +149,26 @@ describe('ペインヘッダーのコピーボタン', () => {
     expect(writeText.mock.calls[0][0]).not.toContain('data-source-line');
     expect(writeText.mock.calls[0][0]).not.toContain('data-mdmiel-style');
     expect(writeText.mock.calls[1][0]).not.toContain('data-source-line');
+  });
+
+  it('csvは表ではなく生ソースをコピーする', async () => {
+    const raw = 'name,qty\npen,2\n';
+    await renderPanes(
+      { 'docs/items.csv': { type: 'csv', content: raw } },
+      { path: 'docs/items.csv' },
+      '/Users/me/work'
+    );
+
+    const shown = panes();
+    expect(shown[0].copyButtons).toHaveLength(1);
+    expect(mount.querySelector('.csv-table')).not.toBeNull();
+    expect(mount.querySelector('.view-mode-switcher-track')).toBeNull();
+    expect(mount.querySelector('.pane-add-comment-btn')).toBeNull();
+    expect(mount.querySelector('.sticky-note-probe')).toBeNull();
+
+    await clickCopy(shown[0].copyButtons[0]);
+    expect(writeText).toHaveBeenCalledWith(raw);
+    expect(writeText.mock.calls[0][0]).not.toContain('<table');
   });
 
   it('ボタンはファイルパスと同じ .pane-title の中、鉛筆の次に置かれる', async () => {

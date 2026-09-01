@@ -24,6 +24,7 @@ func TestServer(t *testing.T) {
 	filesToCreate := map[string]string{
 		"spec.md":                   "# Specification",
 		"mock.html":                 "<html></html>",
+		"items.csv":                 "name,qty\npen,2\n",
 		"style.css":                 "body {}",
 		".mdmiel/comments/123.json": `{"id":"123"}`,
 		"node_modules/dep/a.md":     "# Dependency",
@@ -66,17 +67,21 @@ func TestServer(t *testing.T) {
 			t.Fatalf("failed to decode response: %v", err)
 		}
 
-		// 期待されるファイル: spec.md, mock.html, sub/doc.md
-		// 除外されるべきファイル: .mdmiel/, node_modules/, .git/
+		// 期待されるファイル: spec.md, mock.html, items.csv, sub/doc.md
+		// 除外されるべきファイル: .mdmiel/, node_modules/, .git/, style.css
 		expectedFiles := map[string]bool{
 			"spec.md":    true,
 			"mock.html":  true,
+			"items.csv":  true,
 			"sub/doc.md": true,
 		}
 
 		for _, f := range resp.Files {
 			if !expectedFiles[f.Path] {
 				t.Errorf("unexpected file returned: %s", f.Path)
+			}
+			if f.Path == "items.csv" && f.Type != "csv" {
+				t.Errorf("items.csv type = %q, want csv", f.Type)
 			}
 			delete(expectedFiles, f.Path)
 		}
@@ -110,6 +115,28 @@ func TestServer(t *testing.T) {
 		}
 		if resp.Content != "# Specification" {
 			t.Errorf("expected content # Specification, got %s", resp.Content)
+		}
+	})
+
+	t.Run("GET /api/file csv type", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/api/file?path=items.csv", nil)
+		req.Host = "127.0.0.1:8686"
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusOK {
+			t.Errorf("expected 200, got %d", rec.Code)
+		}
+
+		var resp FileResponse
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+		if resp.Type != "csv" {
+			t.Errorf("expected csv type, got %s", resp.Type)
+		}
+		if resp.Content != "name,qty\npen,2\n" {
+			t.Errorf("unexpected content %q", resp.Content)
 		}
 	})
 

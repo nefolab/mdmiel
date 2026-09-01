@@ -583,6 +583,111 @@ button.pane-copy-content-btn {
   padding: 0;
 }
 
+.pane-content-csv {
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.csv-preview,
+.csv-fallback {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+}
+
+.csv-banner {
+  flex-shrink: 0;
+  margin: 12px 12px 0;
+  padding: 10px 12px;
+  background-color: var(--color-accent-soft);
+  color: var(--color-text);
+  border: 1px solid var(--color-accent);
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.csv-fallback .csv-banner {
+  border-color: var(--color-danger);
+  background-color: var(--color-panel);
+}
+
+.csv-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.csv-table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font-size: 13px;
+}
+
+.csv-table th,
+.csv-table td {
+  border: 1px solid var(--color-border);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  white-space: pre-wrap;
+  max-width: 28em;
+}
+
+.csv-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background-color: var(--color-panel2);
+  font-weight: 600;
+}
+
+.csv-rownum {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background-color: var(--color-panel2);
+  color: var(--color-muted);
+  text-align: right;
+  white-space: nowrap;
+  width: 1%;
+}
+
+.csv-table thead .csv-rownum {
+  z-index: 3;
+}
+
+.csv-cell-empty,
+.csv-cell-missing {
+  background-color: color-mix(in srgb, var(--color-danger) 12%, var(--color-panel));
+}
+
+.csv-cell-empty-header,
+.csv-cell-duplicate-header {
+  background-color: color-mix(in srgb, var(--color-danger) 16%, var(--color-panel2));
+}
+
+.csv-row-ragged td {
+  box-shadow: inset 0 -2px 0 var(--color-danger);
+}
+
+.csv-raw {
+  flex: 1;
+  margin: 12px;
+  padding: 12px;
+  overflow: auto;
+  background-color: var(--color-panel2);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+}
+
 .live-nav-guard-banner {
   position: absolute;
   top: 12px;

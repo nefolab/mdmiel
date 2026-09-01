@@ -194,6 +194,20 @@ type FileResponse struct {
 	EditorScheme string `json:"editorScheme"`
 }
 
+// fileTypeFromExt は一覧と本文取得で同じ拡張子判定を使う。未知は ok=false。
+func fileTypeFromExt(ext string) (string, bool) {
+	switch strings.ToLower(ext) {
+	case ".md", ".markdown":
+		return "markdown", true
+	case ".html", ".htm":
+		return "html", true
+	case ".csv":
+		return "csv", true
+	default:
+		return "", false
+	}
+}
+
 // maxCommentBodyBytes は状態変更API ( POST/PATCH ) のリクエストボディ上限 ( 1MB )。
 // 無制限のjson.Decodeによるメモリ枯渇を防ぐ。超過時は413を返す。
 const maxCommentBodyBytes = 1 << 20
@@ -420,14 +434,8 @@ func (s *Server) handleFiles(w http.ResponseWriter, r *http.Request) {
 			return nil
 		}
 
-		ext := strings.ToLower(filepath.Ext(p))
-		var fileType string
-		switch ext {
-		case ".md", ".markdown":
-			fileType = "markdown"
-		case ".html", ".htm":
-			fileType = "html"
-		default:
+		fileType, ok := fileTypeFromExt(filepath.Ext(p))
+		if !ok {
 			return nil
 		}
 
@@ -484,13 +492,9 @@ func (s *Server) handleFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ext := strings.ToLower(filepath.Ext(resolved))
-	fileType := "unknown"
-	switch ext {
-	case ".md", ".markdown":
-		fileType = "markdown"
-	case ".html", ".htm":
-		fileType = "html"
+	fileType, ok := fileTypeFromExt(filepath.Ext(resolved))
+	if !ok {
+		fileType = "unknown"
 	}
 
 	// TODO(PR-C): publicOrigin が非nilなら AbsPath を空にする。現時点では main.go に

@@ -1,0 +1,5 @@
+Name,Status,Due,Assignee,Tags
+キックオフ資料,Done,2026-09-01,nefo,docs
+CSVインポート確認,In progress,,nefo,"review,csv"
+Notion DB移行,Not started,2026-09-15,nefo,import
+空セルの行,Done,,nefo,

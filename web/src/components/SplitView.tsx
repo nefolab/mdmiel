@@ -10,10 +10,12 @@ import { ViewMode, getViewMode, setViewMode as persistViewMode } from '../lib/vi
 import { useLiveAgentBridge, LiveAgentPickResult } from '../hooks/useLiveAgentBridge';
 import { useStaticPickBridge } from '../hooks/useStaticPickBridge';
 import { buildEditorUrl } from '../lib/editorLink';
+import { FileKind, fileKindIcon } from '../lib/fileKind';
+import { CsvTable } from './CsvTable';
 
 interface PaneData {
   path: string;
-  type: 'markdown' | 'html';
+  type: FileKind;
   content: string;
   renderedHtml: string;
   /** サーバーが解決した絶対パス。公開構成では空文字で、鉛筆ボタンを描画しない */
@@ -24,7 +26,7 @@ interface PaneData {
 
 export interface PaneContentInfo {
   path: string;
-  type: 'markdown' | 'html';
+  type: FileKind;
   content: string;
 }
 
@@ -178,7 +180,7 @@ interface CopyFileContentButtonProps {
 }
 
 /**
- * ファイルパスの横に置くコピーボタン。表示中の生ソース ( markdown / html ) を
+ * ファイルパスの横に置くコピーボタン。表示中の生ソース ( markdown / html / csv ) を
  * クリップボードへ書く。レンダリング後のHTMLやライブDOMは対象にしない。
  *
  * 絶対パスは不要なので、公開構成 ( absPath 空 ) でも出す。ただしファイル切替中に
@@ -401,7 +403,7 @@ export function SplitView({
     }
     return {
       path: data.path,
-      type: data.type as 'markdown' | 'html',
+      type: data.type as FileKind,
       content: data.content,
       renderedHtml: rendered,
       absPath: data.absPath || '',
@@ -498,10 +500,11 @@ export function SplitView({
   const scrollToLine = (
     paneRef: React.RefObject<HTMLDivElement>,
     iframeRef: React.RefObject<HTMLIFrameElement>,
-    type: 'markdown' | 'html',
+    type: FileKind,
     line: number,
     selectorOverride?: string
   ) => {
+    if (type === 'csv') return;
     const performScroll = (container: HTMLElement | Document) => {
       // selectorOverride lets comment-link navigation (App -> #/comment/<id>) target a
       // DOM-anchored comment's element directly, since it has no data-source-line to key on
@@ -925,7 +928,7 @@ export function SplitView({
       <div className="pane" ref={leftPaneRef}>
         <div className="pane-header">
           <div className="pane-title">
-            <span>{leftData?.type === 'markdown' ? '📝' : '🌐'}</span>
+            <span>{fileKindIcon(leftData?.type)}</span>
             <span className="pane-title-path">{leftPath}</span>
             <div className="pane-title-file-actions">
               <OpenInEditorLink data={leftData} path={leftPath} />
@@ -952,7 +955,7 @@ export function SplitView({
         </div>
         <div
           ref={leftContentRef}
-          className={`pane-content ${leftData?.type === 'html' ? 'pane-content-iframe' : ''}`}
+          className={`pane-content ${leftData?.type === 'html' ? 'pane-content-iframe' : ''} ${leftData?.type === 'csv' ? 'pane-content-csv' : ''}`}
           onContextMenu={leftData?.type === 'markdown' ? (e) => handleMarkdownContextMenu(e, 'left') : undefined}
         >
           {leftViewMode === 'live' && leftBridge.blocked && (
@@ -964,6 +967,9 @@ export function SplitView({
           {leftError && <div style={{ padding: '16px', color: 'var(--color-danger)' }}>エラー: {leftError}</div>}
           {!leftError && leftData?.type === 'markdown' && (
             <div className="markdown-body" dangerouslySetInnerHTML={{ __html: leftData.renderedHtml }} />
+          )}
+          {!leftError && leftData?.type === 'csv' && (
+            <CsvTable content={leftData.content} />
           )}
           {!leftError && leftData?.type === 'html' && leftViewMode === 'static' && (
             <iframe
@@ -984,7 +990,7 @@ export function SplitView({
               srcDoc={renderHtmlLive(leftData.content, leftData.path, leftBridge.nonce)}
             />
           )}
-          {!leftError && leftData && (
+          {!leftError && leftData && leftData.type !== 'csv' && (
             <StickyNoteLayer
               type={leftData.type}
               content={leftData.content}
@@ -1008,7 +1014,7 @@ export function SplitView({
         <div className="pane" ref={rightPaneRef}>
           <div className="pane-header">
             <div className="pane-title">
-              <span>{rightData?.type === 'markdown' ? '📝' : '🌐'}</span>
+              <span>{fileKindIcon(rightData?.type)}</span>
               <span className="pane-title-path">{rightPath}</span>
               <div className="pane-title-file-actions">
                 <OpenInEditorLink data={rightData} path={rightPath} />
@@ -1033,7 +1039,7 @@ export function SplitView({
           </div>
           <div
             ref={rightContentRef}
-            className={`pane-content ${rightData?.type === 'html' ? 'pane-content-iframe' : ''}`}
+            className={`pane-content ${rightData?.type === 'html' ? 'pane-content-iframe' : ''} ${rightData?.type === 'csv' ? 'pane-content-csv' : ''}`}
             onContextMenu={rightData?.type === 'markdown' ? (e) => handleMarkdownContextMenu(e, 'right') : undefined}
           >
             {rightViewMode === 'live' && rightBridge.blocked && (
@@ -1045,6 +1051,9 @@ export function SplitView({
             {rightError && <div style={{ padding: '16px', color: 'var(--color-danger)' }}>エラー: {rightError}</div>}
             {!rightError && rightData?.type === 'markdown' && (
               <div className="markdown-body" dangerouslySetInnerHTML={{ __html: rightData.renderedHtml }} />
+            )}
+            {!rightError && rightData?.type === 'csv' && (
+              <CsvTable content={rightData.content} />
             )}
             {!rightError && rightData?.type === 'html' && rightViewMode === 'static' && (
               <iframe
@@ -1065,7 +1074,7 @@ export function SplitView({
                 srcDoc={renderHtmlLive(rightData.content, rightData.path, rightBridge.nonce)}
               />
             )}
-            {!rightError && rightData && (
+            {!rightError && rightData && rightData.type !== 'csv' && (
               <StickyNoteLayer
                 type={rightData.type}
                 content={rightData.content}

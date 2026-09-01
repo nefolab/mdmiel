@@ -83,6 +83,7 @@ func TestFilesResponseCarriesRootName(t *testing.T) {
 var filesFixtureContent = map[string]string{
 	"normal.md":     "# normal\n",
 	"page.html":     "<h1>page</h1>\n",
+	"items.csv":     "name,qty\npen,2\n",
 	"subdir/sub.md": "# sub\n",
 	"仕様 & メモ.md":    "# 仕様\n",
 }

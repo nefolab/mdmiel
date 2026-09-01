@@ -5,6 +5,7 @@
 この章のゴール。
 
 - `main.tsx` → `App.tsx` → `SplitView` → `StickyNoteLayer` / `CommentSidebar` というデータフローの大枠を説明できる
+- csv は `renderer/csv.ts` と `CsvTable` で表になり、`data-source-line` も付箋も持たないことを説明できる
 - `data-source-line` 属性がどこで注入され、00章のアーキテクチャ図のどこに対応するか説明できる
 - 行ズレ追従 ( F10 ) のロジックが `lib/comments.ts` にあり、`lib/anchor.ts` とは役割が別だと説明できる
 
@@ -22,7 +23,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
 
 - `main.tsx` はReactアプリのマウントだけを行うエントリポイント。01章のGoの `func main()` に相当する存在で、ここから先は全て `<App />` 以下のコンポーネントツリーに委ねられる
 - `App.tsx` が状態管理の起点。`viewState` ( URLハッシュから復元した表示状態 )、`commentsPanelOpen` ( コメントパネルの開閉 )、`commentsByPane` ( 左右ペインごとのコメント一覧 ) を持ち、`GET /api/files` 相当のファイル選択とコメント取得をここで統括する
-- `SplitView` が実際の描画を担当する。`viewState` から左右ペインのパスを取り出し、`GET /api/file?path=...` でファイル内容を取得し、markdownかhtmlかに応じて `renderer/markdown.ts` / `renderer/html.ts` でレンダリングしたHTMLを表示する。各ペインの `pane-content` 要素の上に `StickyNoteLayer` が付箋オーバーレイとして重なる
+- `SplitView` が実際の描画を担当する。`viewState` から左右ペインのパスを取り出し、`GET /api/file?path=...` でファイル内容を取得する。`type` が markdown なら `renderer/markdown.ts`、html なら `renderer/html.ts`、csv なら `renderer/csv.ts` と `CsvTable` で表にする。ライブ切替とコメント追加は html だけ。csv には `StickyNoteLayer` を載せない
 - `StickyNoteLayer` は行に対応する付箋カードを絶対配置で表示するオーバーレイ、`CommentSidebar` はコメント一覧を表示する補助パネルで既定は閉じている ( `commentsPanelOpen` の初期値が `false` )。両者は同じ `commentsByPane` を参照するので、`App` がコメントを1箇所でだけ取得すれば両方に反映される
 
 ## 2. renderer/markdown.ts: 行アンカーの仕込み
@@ -55,6 +56,10 @@ md.use(sourceLinePlugin);
 - `markdown-it` はcoreルールにフックを差し込める設計になっており、`md.core.ruler.push('source_line', ...)` で独自のポスト処理ルールを追加している。各ブロックトークンが持つ `token.map` ( ソース上の開始・終了行 ) を読み、`data-source-line` というカスタム属性としてHTMLに焼き込む
 - ここが00章のアーキテクチャ図でいう「行単位の付箋コメント」の土台。行3の右クリックメニューも、`StickyNoteLayer` の付箋位置決めも、全てレンダリング後のDOMから `[data-source-line="N"]` を探すことで実現しており、その属性を仕込んでいるのがこのプラグイン
 - `html: false` はコンストラクタオプションで、生のHTMLタグをエスケープする指定。要件定義書のF2 ( 生HTMLはエスケープ ) に対応する設定で、Markdown内に埋め込まれた `<script>` 等がそのまま実行されないようにしている
+
+## 2.5. renderer/csv.ts: 表と壊れ指摘
+
+CSVは markdown-it に通さない。フロントの純関数 `parseCsv` がカンマ区切りをレコードに分け、1行目をヘッダーにする。`CsvTable` はセルをReactのテキストノードとして出す ( `dangerouslySetInnerHTML` は使わない )。列数不一致・空ヘッダー・重複ヘッダー・空セルは捨てずにバナーとセル強調へ載せる ( F19 )。512KB超や引用符の閉じ漏れは表にせず生テキストへ倒す。付箋の土台である `data-source-line` は付けない。
 
 ## 3. renderer/html.ts: data-source-lineの注入とiframe配信
 
